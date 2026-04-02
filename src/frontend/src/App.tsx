@@ -1,0 +1,1726 @@
+import {
+  CheckCircle2,
+  Home,
+  Loader2,
+  Package as PackageIcon,
+  Settings,
+  ShieldCheck,
+  ShoppingCart,
+  User,
+  X,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  ApiConfig,
+  backendInterface as FullActorInterface,
+} from "./backend.d";
+import AdminDashboard from "./components/AdminDashboard";
+import { useActor } from "./hooks/useActor";
+
+type Package = {
+  id: number;
+  diamonds: number;
+  price: number;
+};
+
+const PACKAGES: Package[] = [
+  { id: 1, diamonds: 25, price: 40.0 },
+  { id: 2, diamonds: 50, price: 65.0 },
+  { id: 3, diamonds: 115, price: 110.0 },
+  { id: 4, diamonds: 240, price: 210.0 },
+  { id: 5, diamonds: 355, price: 310.0 },
+  { id: 6, diamonds: 1240, price: 1010.0 },
+];
+
+const PAYMENT_METHODS = [
+  { id: "eSewa", label: "eSewa", color: "#009944" },
+  { id: "Khalti", label: "Khalti", color: "#5C2D91" },
+  { id: "IME Pay", label: "IME Pay", color: "#EF4444" },
+  { id: "Mobile Banking", label: "Mobile Banking", color: "#3B82F6" },
+];
+
+const LOADING_STATUSES = [
+  "Connecting to server...",
+  "Processing your order...",
+  "Confirming payment...",
+];
+
+const PROVIDER_INSTRUCTIONS: Record<string, string> = {
+  Digiflazz:
+    "Base URL: https://api.digiflazz.com/v1 | Get API key from digiflazz.com dashboard",
+  Apigames: "Base URL: https://apigames.id/api | Register at apigames.id",
+  UniPin: "Base URL: https://api.unipin.com/v1 | Apply at unipin.com/partners",
+  "Garena Reseller": "Apply at garena.com to become an authorized reseller",
+  Custom: "Enter your provider's API endpoint and key",
+};
+
+const PROVIDER_DEFAULTS: Record<string, string> = {
+  Digiflazz: "https://api.digiflazz.com/v1",
+  Apigames: "https://apigames.id/api",
+  UniPin: "https://api.unipin.com/v1",
+  "Garena Reseller": "https://api.garena.com/v1",
+  Custom: "",
+};
+
+async function compressImageToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX_SIZE = 800;
+      let { width, height } = img;
+      if (width > MAX_SIZE || height > MAX_SIZE) {
+        const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.6));
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+type BottomTab = "home" | "orders" | "cart" | "account";
+
+export default function App() {
+  const { actor } = useActor();
+  const fullActor = actor as unknown as FullActorInterface | null;
+
+  // ─── Core state ───
+  const [uid, setUid] = useState("");
+  const [selectedPackage, setSelectedPackage] = useState<Package | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<string>("eSewa");
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState(LOADING_STATUSES[0]);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successTransactionId, setSuccessTransactionId] = useState("");
+  const [successSnapshot, setSuccessSnapshot] = useState<{
+    uid: string;
+    pkg: Package | null;
+  } | null>(null);
+  const [error, setError] = useState("");
+  const statusIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ─── Payment screen state ───
+  const [showPaymentScreen, setShowPaymentScreen] = useState(false);
+  const [paymentScreenshot, setPaymentScreenshot] = useState<File | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(
+    null,
+  );
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Admin ───
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [apiConfig, setApiConfigState] = useState<ApiConfig | null>(null);
+  const [adminProvider, setAdminProvider] = useState("Digiflazz");
+  const [adminApiKey, setAdminApiKey] = useState("");
+  const [adminBaseUrl, setAdminBaseUrl] = useState(
+    "https://api.digiflazz.com/v1",
+  );
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [adminSaved, setAdminSaved] = useState(false);
+
+  // ─── Bottom nav ───
+  const [activeTab, setActiveTab] = useState<BottomTab>("home");
+
+  // ─── View routing ───
+  const [currentView, setCurrentView] = useState<"main" | "admin">("main");
+
+  // ─── Auth state ───
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [currentUser, setCurrentUser] = useState<{
+    name: string;
+    email: string;
+  } | null>(() => {
+    try {
+      const stored = localStorage.getItem("drn_user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  // ─── Auth handlers ───
+  const handleLogin = () => {
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError("Please fill in all fields");
+      return;
+    }
+    const user = { name: authEmail.split("@")[0], email: authEmail };
+    localStorage.setItem("drn_user", JSON.stringify(user));
+    setCurrentUser(user);
+    setShowAuthModal(false);
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthError("");
+  };
+
+  const handleRegister = () => {
+    if (!authName.trim() || !authEmail.trim() || !authPassword.trim()) {
+      setAuthError("Please fill in all fields");
+      return;
+    }
+    if (authPassword !== authConfirmPassword) {
+      setAuthError("Passwords do not match");
+      return;
+    }
+    const user = { name: authName, email: authEmail };
+    localStorage.setItem("drn_user", JSON.stringify(user));
+    setCurrentUser(user);
+    setShowAuthModal(false);
+    setAuthName("");
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthConfirmPassword("");
+    setAuthError("");
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("drn_user");
+    setCurrentUser(null);
+  };
+
+  const openAuth = (mode: "login" | "register" = "login") => {
+    setAuthMode(mode);
+    setAuthError("");
+    setShowAuthModal(true);
+  };
+
+  // ─── Google Sign-In (coming soon) ───
+  const handleGoogleSignIn = () => {
+    setAuthError(
+      "Google Sign-In coming soon. Please use email/password login.",
+    );
+  };
+
+  // ─── User orders state ───
+  const [userOrders, setUserOrders] = useState<
+    Array<{
+      id: string;
+      playerUID: string;
+      packageName: string;
+      priceNPR: bigint;
+      screenshotData: string;
+      status: string;
+      timestamp: bigint;
+    }>
+  >([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+
+  const loadUserOrders = useCallback(async () => {
+    if (!fullActor || !currentUser) return;
+    setOrdersLoading(true);
+    try {
+      const orders = await fullActor.getManualOrders();
+      setUserOrders(orders);
+    } catch (e) {
+      console.error("Failed to load orders:", e);
+    }
+    setOrdersLoading(false);
+  }, [fullActor, currentUser]);
+
+  useEffect(() => {
+    if (activeTab === "orders" && currentUser) {
+      void loadUserOrders();
+    }
+  }, [activeTab, currentUser, loadUserOrders]);
+
+  // ─── Payment screen handlers ───
+  const handleScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setPaymentScreenshot(file);
+      const reader = new FileReader();
+      reader.onload = (ev) => setScreenshotPreview(ev.target?.result as string);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handlePaymentScreenOpen = () => {
+    if (!uid.trim()) {
+      setError("Please enter your Player UID");
+      return;
+    }
+    if (!selectedPackage) {
+      setError("Please select a diamond package");
+      return;
+    }
+    setError("");
+    setPaymentScreenshot(null);
+    setScreenshotPreview(null);
+    setShowPaymentScreen(true);
+  };
+
+  const handleManualSubmit = useCallback(async () => {
+    if (!fullActor || !selectedPackage || !uid) return;
+    setIsLoading(true);
+    setError("");
+    setLoadingStatus(LOADING_STATUSES[0]);
+    let statusIdx = 0;
+    statusIntervalRef.current = setInterval(() => {
+      statusIdx = (statusIdx + 1) % LOADING_STATUSES.length;
+      setLoadingStatus(LOADING_STATUSES[statusIdx]);
+    }, 1000);
+    try {
+      let screenshotData = "";
+      if (paymentScreenshot) {
+        screenshotData = await compressImageToBase64(paymentScreenshot);
+      }
+      const orderId = await fullActor.submitManualOrder(
+        uid,
+        `${selectedPackage.diamonds} Diamonds`,
+        BigInt(Math.round(selectedPackage.price)),
+        screenshotData,
+      );
+      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+      setSuccessTransactionId(orderId);
+      setSuccessSnapshot({ uid, pkg: selectedPackage });
+      setShowPaymentScreen(false);
+      setShowSuccess(true);
+    } catch (e) {
+      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+      console.error(e);
+      setError("Failed to submit order. Please try again.");
+    }
+    setIsLoading(false);
+  }, [fullActor, uid, selectedPackage, paymentScreenshot]);
+
+  const handleCloseSuccess = useCallback(() => {
+    setShowSuccess(false);
+    setUid("");
+    setSelectedPackage(null);
+    setError("");
+    setSuccessTransactionId("");
+    setSuccessSnapshot(null);
+  }, []);
+
+  // ─── Admin handlers ───
+  const loadApiConfig = useCallback(async () => {
+    if (!fullActor) return;
+    try {
+      const config = await fullActor.getApiConfig();
+      setApiConfigState(config);
+      if (config.provider) {
+        setAdminProvider(config.provider);
+        setAdminBaseUrl(PROVIDER_DEFAULTS[config.provider] || "");
+      }
+    } catch (e) {
+      console.error("Failed to load api config:", e);
+    }
+  }, [fullActor]);
+
+  const handleSaveApiConfig = useCallback(async () => {
+    if (!fullActor) return;
+    setAdminSaving(true);
+    setAdminSaved(false);
+    try {
+      await fullActor.setApiConfig(adminApiKey, adminBaseUrl, adminProvider);
+      await loadApiConfig();
+      setAdminSaved(true);
+      setTimeout(() => setAdminSaved(false), 3000);
+    } catch (e) {
+      console.error("Failed to save config:", e);
+    }
+    setAdminSaving(false);
+  }, [fullActor, adminApiKey, adminBaseUrl, adminProvider, loadApiConfig]);
+
+  const handleProviderChange = (value: string) => {
+    setAdminProvider(value);
+    setAdminBaseUrl(PROVIDER_DEFAULTS[value] || "");
+  };
+
+  if (currentView === "admin") {
+    return (
+      <AdminDashboard actor={fullActor} onBack={() => setCurrentView("main")} />
+    );
+  }
+
+  const canProceed = Boolean(uid.trim() && selectedPackage);
+
+  // ─── Tab content ───
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case "orders":
+        if (!currentUser) {
+          return (
+            <div className="flex flex-col items-center justify-center py-20 gap-4 px-6">
+              <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
+                <PackageIcon size={36} className="text-orange-300" />
+              </div>
+              <h3 className="font-bold text-wt-text text-lg">
+                Login to See Orders
+              </h3>
+              <p className="text-wt-muted text-sm text-center leading-relaxed">
+                Please login to view your submitted top-up orders.
+              </p>
+              <button
+                type="button"
+                onClick={() => openAuth("login")}
+                className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+                data-ocid="orders.primary_button"
+              >
+                Login / Register
+              </button>
+            </div>
+          );
+        }
+        if (ordersLoading) {
+          return (
+            <div
+              className="flex flex-col items-center justify-center py-20 gap-4"
+              data-ocid="orders.loading_state"
+            >
+              <Loader2 size={32} className="text-wt-orange animate-spin" />
+              <p className="text-wt-muted text-sm">Loading your orders...</p>
+            </div>
+          );
+        }
+        if (userOrders.length === 0) {
+          return (
+            <div
+              className="flex flex-col items-center justify-center py-20 gap-4 px-6"
+              data-ocid="orders.empty_state"
+            >
+              <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
+                <PackageIcon size={36} className="text-orange-300" />
+              </div>
+              <h3 className="font-bold text-wt-text text-lg">No Orders Yet</h3>
+              <p className="text-wt-muted text-sm text-center leading-relaxed">
+                Your submitted top-up orders will appear here after you complete
+                a purchase.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveTab("home")}
+                className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+                data-ocid="orders.primary_button"
+              >
+                Buy Diamonds
+              </button>
+            </div>
+          );
+        }
+        return (
+          <div className="px-4 py-6" data-ocid="orders.list">
+            <h2 className="text-wt-text font-bold text-lg mb-4">My Orders</h2>
+            <div className="flex flex-col gap-3">
+              {userOrders.map((order, idx) => {
+                const dateMs = Number(order.timestamp) / 1_000_000;
+                const dateStr = new Date(dateMs).toLocaleDateString("en-NP", {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                });
+                const isCompleted = order.status.toLowerCase() === "completed";
+                return (
+                  <div
+                    key={order.id}
+                    className="bg-white rounded-2xl border border-wt-border shadow-card p-4"
+                    data-ocid={`orders.item.${idx + 1}`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-wt-text text-base">
+                        {order.packageName}
+                      </p>
+                      <span
+                        className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                          isCompleted
+                            ? "bg-green-100 text-green-700"
+                            : "bg-orange-100 text-orange-700"
+                        }`}
+                      >
+                        {isCompleted ? "Completed" : "Pending"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-bold price-gold">
+                          Rs {Number(order.priceNPR).toFixed(2)}
+                        </p>
+                        <p className="text-xs text-wt-muted mt-0.5">
+                          UID: {order.playerUID}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {dateStr}
+                        </p>
+                      </div>
+                      <p className="text-[10px] text-gray-300 font-mono max-w-[80px] truncate text-right">
+                        #{order.id.slice(0, 8)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      case "cart":
+        return selectedPackage ? (
+          <div className="px-4 py-6">
+            <h2 className="text-wt-text font-bold text-lg mb-4">Your Cart</h2>
+            <div className="bg-white rounded-2xl border border-wt-border shadow-card p-5">
+              <div className="flex items-center gap-4 mb-4">
+                <img
+                  src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                  alt="Diamond"
+                  className="w-14 h-14 object-contain"
+                />
+                <div className="flex-1">
+                  <p className="font-bold text-wt-text text-base">
+                    {selectedPackage.diamonds} Diamonds
+                  </p>
+                  <p className="text-sm font-bold price-gold">
+                    {selectedPackage.price.toFixed(2)}Rs
+                  </p>
+                </div>
+              </div>
+              <div className="border-t border-wt-border pt-4">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-wt-muted text-sm">Player UID</span>
+                  <span className="text-wt-text text-sm font-semibold">
+                    {uid || "Not entered"}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-wt-muted text-sm">Total</span>
+                  <span className="font-bold price-gold text-base">
+                    {selectedPackage.price.toFixed(2)}Rs
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab("home");
+                  handlePaymentScreenOpen();
+                }}
+                disabled={!uid.trim()}
+                className="mt-4 w-full py-3 rounded-xl bg-wt-orange text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                data-ocid="cart.submit_button"
+              >
+                Proceed to Payment
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="flex flex-col items-center justify-center py-20 gap-4 px-6"
+            data-ocid="cart.empty_state"
+          >
+            <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
+              <ShoppingCart size={36} className="text-orange-300" />
+            </div>
+            <h3 className="font-bold text-wt-text text-lg">Cart is Empty</h3>
+            <p className="text-wt-muted text-sm text-center">
+              Select a diamond package to add it to your cart.
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveTab("home")}
+              className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+              data-ocid="cart.primary_button"
+            >
+              Browse Packages
+            </button>
+          </div>
+        );
+      case "account":
+        return currentUser ? (
+          <div className="px-4 py-6">
+            <h2 className="text-wt-text font-bold text-lg mb-4">My Account</h2>
+            <div className="bg-white rounded-2xl border border-wt-border shadow-card p-5 mb-4">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-wt-orange flex items-center justify-center shrink-0">
+                  <span className="text-white font-extrabold text-xl">
+                    {currentUser.name[0]?.toUpperCase()}
+                  </span>
+                </div>
+                <div>
+                  <p className="font-bold text-wt-text text-base">
+                    {currentUser.name}
+                  </p>
+                  <p className="text-wt-muted text-sm">{currentUser.email}</p>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full py-3 rounded-xl border border-red-200 text-red-500 font-semibold text-sm hover:bg-red-50 transition-colors"
+            >
+              Logout
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-20 gap-4 px-6">
+            <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
+              <User size={36} className="text-orange-300" />
+            </div>
+            <h3 className="font-bold text-wt-text text-lg">My Account</h3>
+            <p className="text-wt-muted text-sm text-center leading-relaxed">
+              Sign in to view your order history, manage your account, and track
+              deliveries.
+            </p>
+            <button
+              type="button"
+              onClick={() => openAuth("login")}
+              className="mt-2 px-8 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+              data-ocid="account.primary_button"
+            >
+              Login / Register
+            </button>
+          </div>
+        );
+      default:
+        return <HomeContent />;
+    }
+  };
+
+  // ─── Home content sub-component ───
+  function HomeContent() {
+    return (
+      <div className="px-4 py-4 pb-2">
+        {/* Game label */}
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-1 h-5 rounded-full bg-wt-orange" />
+          <h2 className="text-wt-text font-bold text-base">
+            Free Fire Diamonds
+          </h2>
+        </div>
+
+        {/* UID Input */}
+        <div className="mb-5">
+          <label
+            htmlFor="player-uid"
+            className="block text-xs font-semibold text-wt-muted mb-1.5 uppercase tracking-wide"
+          >
+            Player UID
+          </label>
+          <input
+            id="player-uid"
+            type="text"
+            value={uid}
+            onChange={(e) => {
+              setUid(e.target.value);
+              setError("");
+            }}
+            placeholder="Enter your Free Fire Player UID"
+            className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent transition-all"
+            data-ocid="topup.input"
+          />
+        </div>
+
+        {/* Packages label */}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="w-1 h-5 rounded-full bg-wt-orange" />
+          <h2 className="text-wt-text font-bold text-base">Select Package</h2>
+        </div>
+
+        {/* Package Grid — 2 columns */}
+        <div className="grid grid-cols-2 gap-3 mb-5">
+          {PACKAGES.map((pkg, idx) => {
+            const isSelected = selectedPackage?.id === pkg.id;
+            return (
+              <motion.button
+                key={pkg.id}
+                type="button"
+                whileTap={{ scale: 0.97 }}
+                onClick={() => {
+                  setSelectedPackage(pkg);
+                  setError("");
+                }}
+                className={`relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 bg-white text-left transition-all duration-200 ${
+                  isSelected
+                    ? "border-wt-orange shadow-orange-glow"
+                    : "border-wt-border shadow-card hover:border-orange-200 hover:shadow-card-hover"
+                }`}
+                data-ocid={`topup.item.${idx + 1}`}
+              >
+                {/* Selected checkmark */}
+                {isSelected && (
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-wt-orange flex items-center justify-center">
+                    <CheckCircle2 size={12} className="text-white" />
+                  </div>
+                )}
+
+                {/* Diamond icon */}
+                <img
+                  src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                  alt="Diamond"
+                  className="w-14 h-14 object-contain"
+                />
+
+                {/* Diamond count */}
+                <p className="text-wt-text font-bold text-sm text-center leading-tight">
+                  {pkg.diamonds.toLocaleString()} Diamonds
+                </p>
+
+                {/* Price */}
+                <p className="font-extrabold text-base price-gold text-center">
+                  {pkg.price.toFixed(2)}Rs
+                </p>
+              </motion.button>
+            );
+          })}
+        </div>
+
+        {/* Payment method selector */}
+        {selectedPackage && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className="mb-5"
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-5 rounded-full bg-wt-orange" />
+              <h2 className="text-wt-text font-bold text-base">
+                Payment Method
+              </h2>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {PAYMENT_METHODS.map((method) => {
+                const isActive = selectedPayment === method.id;
+                return (
+                  <button
+                    key={method.id}
+                    type="button"
+                    onClick={() => setSelectedPayment(method.id)}
+                    className={`flex items-center gap-2.5 px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all duration-150 ${
+                      isActive
+                        ? "border-wt-orange bg-orange-50 text-wt-orange"
+                        : "border-wt-border bg-white text-wt-text hover:border-orange-200"
+                    }`}
+                    data-ocid={`topup.radio.${PAYMENT_METHODS.indexOf(method) + 1}`}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ background: method.color }}
+                    />
+                    {method.label}
+                  </button>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Error message */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              className="mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm font-medium"
+              data-ocid="topup.error_state"
+            >
+              ⚠️ {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* TOP-UP NOW button */}
+        <button
+          type="button"
+          onClick={handlePaymentScreenOpen}
+          disabled={!canProceed || isLoading}
+          className="w-full py-4 rounded-xl font-bold text-base transition-all duration-200 mb-3"
+          style={
+            canProceed && !isLoading
+              ? {
+                  background: "#F97316",
+                  color: "#fff",
+                  boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
+                }
+              : {
+                  background: "#F3F4F6",
+                  color: "#9CA3AF",
+                  cursor: !canProceed ? "not-allowed" : "wait",
+                }
+          }
+          data-ocid="topup.submit_button"
+        >
+          {isLoading ? (
+            <span
+              className="flex items-center justify-center gap-2"
+              data-ocid="topup.loading_state"
+            >
+              <Loader2 className="animate-spin h-4 w-4" />
+              {loadingStatus}
+            </span>
+          ) : (
+            "TOP-UP NOW"
+          )}
+        </button>
+
+        {/* Selected summary hint */}
+        {selectedPackage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex items-center justify-between px-4 py-3 rounded-xl bg-orange-50 border border-orange-100 mb-2"
+          >
+            <div className="flex items-center gap-2">
+              <img
+                src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                alt="Diamond"
+                className="w-6 h-6 object-contain"
+              />
+              <span className="text-wt-text text-sm font-semibold">
+                {selectedPackage.diamonds} Diamonds
+              </span>
+            </div>
+            <span className="font-bold price-gold text-sm">
+              {selectedPackage.price.toFixed(2)}Rs
+            </span>
+          </motion.div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-wt-surface flex flex-col font-jakarta">
+      {/* ═══ HEADER ═══ */}
+      <header
+        className="sticky top-0 z-50 bg-white border-b border-wt-border shadow-xs"
+        data-ocid="nav.section"
+      >
+        <div className="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
+          {/* Logo */}
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-md bg-wt-orange flex items-center justify-center shrink-0">
+              <span className="text-white font-extrabold text-sm leading-none">
+                DRN
+              </span>
+            </div>
+            <span className="font-extrabold text-wt-text text-base tracking-tight">
+              DRN ML TopUp
+            </span>
+          </div>
+
+          {/* Login / User button */}
+          {currentUser ? (
+            <div className="flex items-center gap-2">
+              <span className="text-wt-text text-xs font-semibold hidden sm:block">
+                {currentUser.name}
+              </span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-3 py-2 rounded-full border border-wt-border text-wt-muted font-semibold text-xs transition-all duration-150 hover:bg-gray-50"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => openAuth("login")}
+              className="px-4 py-2 rounded-full bg-wt-orange text-white font-semibold text-xs transition-all duration-150 hover:bg-wt-orange-dark active:scale-95"
+              data-ocid="nav.primary_button"
+            >
+              Login / Register
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* ═══ MAIN CONTENT ═══ */}
+      <main className="flex-1 overflow-y-auto max-w-lg mx-auto w-full pb-20">
+        {renderTabContent()}
+      </main>
+
+      {/* ═══ BOTTOM NAVIGATION ═══ */}
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-wt-border"
+        data-ocid="nav.tab"
+      >
+        <div className="max-w-lg mx-auto">
+          <div className="grid grid-cols-4 h-16">
+            {[
+              {
+                id: "home" as BottomTab,
+                label: "Home",
+                icon: Home,
+                ocid: "nav.home.tab",
+              },
+              {
+                id: "orders" as BottomTab,
+                label: "My Orders",
+                icon: PackageIcon,
+                ocid: "nav.orders.tab",
+              },
+              {
+                id: "cart" as BottomTab,
+                label: "Cart",
+                icon: ShoppingCart,
+                ocid: "nav.cart.tab",
+              },
+              {
+                id: "account" as BottomTab,
+                label: "My Account",
+                icon: User,
+                ocid: "nav.account.tab",
+              },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex flex-col items-center justify-center gap-0.5 transition-colors duration-150 ${
+                    isActive
+                      ? "text-wt-orange"
+                      : "text-gray-400 hover:text-gray-600"
+                  }`}
+                  data-ocid={tab.ocid}
+                >
+                  <Icon
+                    size={20}
+                    strokeWidth={isActive ? 2.5 : 2}
+                    className={isActive ? "text-wt-orange" : ""}
+                  />
+                  <span
+                    className={`text-[10px] font-semibold leading-tight ${
+                      isActive ? "text-wt-orange" : "text-gray-400"
+                    }`}
+                  >
+                    {tab.label}
+                  </span>
+                  {isActive && (
+                    <div className="w-1 h-1 rounded-full bg-wt-orange -mt-0.5" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </nav>
+
+      {/* ═══ PAYMENT MODAL ═══ */}
+      <AnimatePresence>
+        {showPaymentScreen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
+            style={{
+              background: "rgba(0,0,0,0.5)",
+              backdropFilter: "blur(4px)",
+            }}
+            data-ocid="payment.modal"
+          >
+            <motion.div
+              initial={{ y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 80, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 280, damping: 26 }}
+              className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl overflow-hidden max-h-[92vh] flex flex-col"
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-wt-border shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowPaymentScreen(false)}
+                  className="flex items-center gap-1.5 text-wt-muted hover:text-wt-text transition-colors text-sm font-semibold"
+                  data-ocid="payment.close_button"
+                >
+                  ← Back
+                </button>
+                <h2 className="font-bold text-wt-text text-base">
+                  Complete Payment
+                </h2>
+                <div className="w-12" />
+              </div>
+
+              <div className="overflow-y-auto flex-1 px-5 pb-6 pt-4 space-y-4">
+                {/* QR Code section */}
+                <div className="flex flex-col items-center gap-3 py-2">
+                  <div className="rounded-2xl p-3 shadow-card border border-wt-border">
+                    <img
+                      src="/assets/img_20260317_151439-019d41e4-754f-744f-917b-5a2de33ccb10.jpg"
+                      alt="eSewa QR Code"
+                      width={200}
+                      height={200}
+                      className="block rounded-lg"
+                      style={{ width: 200, height: 200, objectFit: "contain" }}
+                    />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-wt-muted text-xs mb-1">
+                      Scan QR or send to eSewa number:
+                    </p>
+                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-green-50 border border-green-200">
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
+                      <span className="font-bold text-green-700 text-lg tracking-widest">
+                        9842668372
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Order summary */}
+                <div className="rounded-xl border border-wt-border overflow-hidden">
+                  <div className="px-4 py-2 bg-wt-surface border-b border-wt-border">
+                    <span className="text-xs font-semibold text-wt-muted uppercase tracking-wide">
+                      Order Summary
+                    </span>
+                  </div>
+                  {[
+                    {
+                      label: "Player UID",
+                      value: uid ? `****${uid.slice(-4)}` : "—",
+                    },
+                    {
+                      label: "Package",
+                      value: selectedPackage
+                        ? `${selectedPackage.diamonds.toLocaleString()} Diamonds`
+                        : "—",
+                      highlight: true,
+                    },
+                    {
+                      label: "Amount",
+                      value: selectedPackage
+                        ? `${selectedPackage.price.toFixed(2)}Rs`
+                        : "—",
+                      price: true,
+                    },
+                  ].map((row) => (
+                    <div
+                      key={row.label}
+                      className="flex justify-between items-center px-4 py-3 border-b border-wt-border last:border-0"
+                    >
+                      <span className="text-wt-muted text-sm">{row.label}</span>
+                      <span
+                        className={`text-sm font-bold ${
+                          row.price
+                            ? "price-gold text-base"
+                            : row.highlight
+                              ? "text-blue-600"
+                              : "text-wt-text"
+                        }`}
+                      >
+                        {row.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Screenshot upload */}
+                <div>
+                  <p className="text-xs font-semibold text-wt-muted uppercase tracking-wide mb-2">
+                    Upload Payment Screenshot
+                  </p>
+                  <input
+                    ref={screenshotInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={handleScreenshotChange}
+                    data-ocid="payment.upload_button"
+                  />
+                  {!screenshotPreview ? (
+                    <button
+                      type="button"
+                      onClick={() => screenshotInputRef.current?.click()}
+                      className="w-full flex items-center justify-center gap-2 py-4 rounded-xl border-2 border-dashed border-orange-200 bg-orange-50 text-wt-orange text-sm font-semibold hover:bg-orange-100 transition-colors"
+                      data-ocid="payment.dropzone"
+                    >
+                      📎 Upload Screenshot
+                    </button>
+                  ) : (
+                    <div className="relative rounded-xl overflow-hidden border border-wt-border">
+                      <img
+                        src={screenshotPreview}
+                        alt="Payment screenshot preview"
+                        className="w-full max-h-40 object-contain bg-gray-50"
+                      />
+                      <div className="flex items-center justify-between px-3 py-2 bg-white border-t border-wt-border">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <CheckCircle2
+                            size={14}
+                            className="text-green-500 shrink-0"
+                          />
+                          <span className="text-wt-text text-xs truncate">
+                            {paymentScreenshot?.name}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentScreenshot(null);
+                            setScreenshotPreview(null);
+                            if (screenshotInputRef.current)
+                              screenshotInputRef.current.value = "";
+                          }}
+                          className="shrink-0 ml-2 text-wt-muted hover:text-red-500 text-xs font-semibold transition-colors"
+                          data-ocid="payment.cancel_button"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Error */}
+                <AnimatePresence>
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm"
+                      data-ocid="payment.error_state"
+                    >
+                      ⚠️ {error}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Submit */}
+                <motion.button
+                  type="button"
+                  whileHover={{ scale: 1.01 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleManualSubmit}
+                  disabled={isLoading}
+                  className="w-full py-4 rounded-xl font-bold text-white text-base transition-all disabled:opacity-70"
+                  style={{
+                    background: "#F97316",
+                    boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
+                  }}
+                  data-ocid="payment.submit_button"
+                >
+                  {isLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="animate-spin h-4 w-4" />
+                      {loadingStatus}
+                    </span>
+                  ) : (
+                    "✅ I've Paid — Submit Order"
+                  )}
+                </motion.button>
+
+                <p className="text-center text-wt-muted text-xs leading-relaxed pb-2">
+                  After paying via eSewa, upload your screenshot and tap Submit.
+                  Your diamonds will be sent after payment verification.
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ SUCCESS MODAL ═══ */}
+      <AnimatePresence>
+        {showSuccess && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center px-4"
+            style={{
+              background: "rgba(0,0,0,0.5)",
+              backdropFilter: "blur(4px)",
+            }}
+            data-ocid="success.modal"
+          >
+            <motion.div
+              initial={{ scale: 0.85, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.85, y: 20 }}
+              transition={{ type: "spring", stiffness: 280, damping: 24 }}
+              className="w-full max-w-sm bg-white rounded-3xl shadow-xl overflow-hidden"
+            >
+              {/* Success header */}
+              <div className="bg-gradient-to-br from-orange-400 to-orange-500 px-6 py-8 flex flex-col items-center gap-3">
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{
+                    type: "spring",
+                    stiffness: 300,
+                    damping: 18,
+                    delay: 0.1,
+                  }}
+                  className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center"
+                >
+                  <CheckCircle2 size={36} className="text-white" />
+                </motion.div>
+                <h2 className="font-extrabold text-white text-xl">
+                  Order Submitted!
+                </h2>
+                <p className="text-white/80 text-sm text-center">
+                  We'll send your diamonds after verifying your payment.
+                </p>
+              </div>
+
+              {/* Details */}
+              <div className="px-6 py-5">
+                <div className="space-y-3 mb-5">
+                  {[
+                    { label: "Player UID", value: successSnapshot?.uid ?? uid },
+                    {
+                      label: "Diamonds",
+                      value: successSnapshot?.pkg
+                        ? `${successSnapshot.pkg.diamonds.toLocaleString()} Diamonds`
+                        : "",
+                    },
+                    {
+                      label: "Amount Paid",
+                      value: successSnapshot?.pkg
+                        ? `${successSnapshot.pkg.price.toFixed(2)}Rs`
+                        : "",
+                      price: true,
+                    },
+                    ...(successTransactionId
+                      ? [
+                          {
+                            label: "Order ID",
+                            value: successTransactionId,
+                            mono: true,
+                          },
+                        ]
+                      : []),
+                  ].map((row) => (
+                    <div
+                      key={row.label}
+                      className="flex justify-between items-center"
+                    >
+                      <span className="text-wt-muted text-sm">{row.label}</span>
+                      <span
+                        className={`text-sm font-bold max-w-[55%] text-right break-all ${
+                          row.price
+                            ? "price-gold"
+                            : row.mono
+                              ? "font-mono text-xs text-wt-muted"
+                              : "text-wt-text"
+                        }`}
+                      >
+                        {row.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mb-4 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs leading-relaxed">
+                  ✅ Manual order saved — diamonds will be sent once your eSewa
+                  payment is verified.
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCloseSuccess}
+                  className="w-full py-3.5 rounded-xl font-bold text-white text-sm"
+                  style={{ background: "#F97316" }}
+                  data-ocid="success.close_button"
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ API CONFIG MODAL ═══ */}
+      <AnimatePresence>
+        {adminModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center px-4"
+            style={{ background: "rgba(0,0,0,0.5)" }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setAdminModalOpen(false);
+            }}
+            data-ocid="admin.modal"
+          >
+            <motion.div
+              initial={{ scale: 0.93, y: 16, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.93, y: 16, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 24 }}
+              className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-wt-border">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
+                    <Settings size={16} className="text-wt-orange" />
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-wt-text text-sm">
+                      API Configuration
+                    </h2>
+                    <p className="text-wt-muted text-xs">
+                      Connect a real top-up provider
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAdminModalOpen(false)}
+                  className="text-wt-muted hover:text-wt-text transition-colors p-1.5 rounded-lg hover:bg-wt-surface"
+                  data-ocid="admin.close_button"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="px-6 py-5 space-y-4">
+                {apiConfig !== null && (
+                  <div
+                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium border ${
+                      apiConfig.isConfigured
+                        ? "bg-green-50 border-green-200 text-green-700"
+                        : "bg-orange-50 border-orange-200 text-orange-700"
+                    }`}
+                    data-ocid="admin.success_state"
+                  >
+                    <div
+                      className={`w-2 h-2 rounded-full ${apiConfig.isConfigured ? "bg-green-500" : "bg-orange-400"}`}
+                    />
+                    {apiConfig.isConfigured
+                      ? `Live — Provider: ${apiConfig.provider}`
+                      : "Simulation mode — no API configured"}
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="admin-provider"
+                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                  >
+                    Provider
+                  </label>
+                  <select
+                    id="admin-provider"
+                    value={adminProvider}
+                    onChange={(e) => handleProviderChange(e.target.value)}
+                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    data-ocid="admin.select"
+                  >
+                    {[
+                      "Digiflazz",
+                      "Apigames",
+                      "UniPin",
+                      "Garena Reseller",
+                      "Custom",
+                    ].map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                  {PROVIDER_INSTRUCTIONS[adminProvider] && (
+                    <p className="mt-1.5 text-xs text-wt-muted">
+                      {PROVIDER_INSTRUCTIONS[adminProvider]}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="admin-baseurl"
+                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                  >
+                    Base URL
+                  </label>
+                  <input
+                    id="admin-baseurl"
+                    type="url"
+                    value={adminBaseUrl}
+                    onChange={(e) => setAdminBaseUrl(e.target.value)}
+                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    data-ocid="admin.input"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="admin-apikey"
+                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                  >
+                    API Key
+                  </label>
+                  <input
+                    id="admin-apikey"
+                    type="password"
+                    value={adminApiKey}
+                    onChange={(e) => setAdminApiKey(e.target.value)}
+                    placeholder="Enter your API key"
+                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent placeholder:text-gray-400"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setAdminModalOpen(false)}
+                    className="flex-1 py-3 rounded-xl border border-wt-border text-wt-muted font-semibold text-sm hover:bg-wt-surface transition-colors"
+                    data-ocid="admin.cancel_button"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveApiConfig}
+                    disabled={adminSaving || !adminApiKey.trim()}
+                    className="flex-1 py-3 rounded-xl bg-wt-orange text-white font-semibold text-sm disabled:opacity-50 transition-all"
+                    data-ocid="admin.save_button"
+                  >
+                    {adminSaving ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <Loader2 className="animate-spin h-4 w-4" />
+                        Saving...
+                      </span>
+                    ) : adminSaved ? (
+                      "Saved ✓"
+                    ) : (
+                      "Save Config"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ AUTH MODAL ═══ */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
+            style={{
+              background: "rgba(0,0,0,0.5)",
+              backdropFilter: "blur(4px)",
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowAuthModal(false);
+            }}
+          >
+            <motion.div
+              initial={{ y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 80, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 280, damping: 26 }}
+              className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl overflow-hidden"
+            >
+              {/* Modal header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-wt-border">
+                <h2 className="font-bold text-wt-text text-base">
+                  {authMode === "login" ? "Login" : "Create Account"}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowAuthModal(false)}
+                  className="text-wt-muted hover:text-wt-text transition-colors p-1.5 rounded-lg hover:bg-wt-surface"
+                  data-ocid="auth.close_button"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="px-5 py-5 space-y-4">
+                {/* Tab toggle */}
+                <div className="flex rounded-xl bg-wt-surface p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode("login");
+                      setAuthError("");
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
+                      authMode === "login"
+                        ? "bg-white text-wt-text shadow-sm"
+                        : "text-wt-muted"
+                    }`}
+                    data-ocid="auth.login.tab"
+                  >
+                    Login
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode("register");
+                      setAuthError("");
+                    }}
+                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
+                      authMode === "register"
+                        ? "bg-white text-wt-text shadow-sm"
+                        : "text-wt-muted"
+                    }`}
+                    data-ocid="auth.register.tab"
+                  >
+                    Register
+                  </button>
+                </div>
+
+                {/* Register-only: name field */}
+                {authMode === "register" && (
+                  <div>
+                    <label
+                      htmlFor="auth-name"
+                      className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    >
+                      Full Name
+                    </label>
+                    <input
+                      type="text"
+                      value={authName}
+                      onChange={(e) => setAuthName(e.target.value)}
+                      placeholder="Your name"
+                      className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                      id="auth-name"
+                      data-ocid="auth.name.input"
+                    />
+                  </div>
+                )}
+
+                {/* Email */}
+                <div>
+                  <label
+                    htmlFor="auth-email"
+                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                  >
+                    Email / Username
+                  </label>
+                  <input
+                    type="text"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    placeholder="Enter email or username"
+                    className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    id="auth-email"
+                    data-ocid="auth.input"
+                  />
+                </div>
+
+                {/* Password */}
+                <div>
+                  <label
+                    htmlFor="auth-password"
+                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                  >
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="Enter password"
+                    className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    id="auth-password"
+                    data-ocid="auth.password.input"
+                  />
+                </div>
+
+                {/* Confirm password (register only) */}
+                {authMode === "register" && (
+                  <div>
+                    <label
+                      htmlFor="auth-confirm"
+                      className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    >
+                      Confirm Password
+                    </label>
+                    <input
+                      type="password"
+                      value={authConfirmPassword}
+                      onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                      placeholder="Confirm password"
+                      className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                      id="auth-confirm"
+                      data-ocid="auth.confirm.input"
+                    />
+                  </div>
+                )}
+
+                {/* Error */}
+                <AnimatePresence>
+                  {authError && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm"
+                      data-ocid="auth.error_state"
+                    >
+                      ⚠️ {authError}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Submit button */}
+                <button
+                  type="button"
+                  onClick={authMode === "login" ? handleLogin : handleRegister}
+                  className="w-full py-4 rounded-xl font-bold text-white text-base"
+                  style={{
+                    background: "#F97316",
+                    boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
+                  }}
+                  data-ocid="auth.submit_button"
+                >
+                  {authMode === "login" ? "Login" : "Create Account"}
+                </button>
+
+                {/* OR divider */}
+                <div className="flex items-center gap-3 my-1">
+                  <div className="flex-1 h-px bg-gray-200" />
+                  <span className="text-xs text-gray-400 font-medium">OR</span>
+                  <div className="flex-1 h-px bg-gray-200" />
+                </div>
+
+                {/* Google Sign-In button — coming soon */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    className="w-full py-3 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center gap-3 font-semibold text-gray-400 text-sm opacity-70 cursor-not-allowed"
+                    data-ocid="auth.google_button"
+                  >
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 18 18"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                      aria-hidden="true"
+                      className="opacity-50"
+                    >
+                      <path
+                        d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"
+                        fill="#4285F4"
+                      />
+                      <path
+                        d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"
+                        fill="#34A853"
+                      />
+                      <path
+                        d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"
+                        fill="#FBBC05"
+                      />
+                      <path
+                        d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"
+                        fill="#EA4335"
+                      />
+                    </svg>
+                    Sign in with Google
+                    <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-500">
+                      Coming Soon
+                    </span>
+                  </button>
+                </div>
+
+                <p className="text-center text-wt-muted text-xs pb-1">
+                  {authMode === "login"
+                    ? "Don't have an account? "
+                    : "Already have an account? "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode(authMode === "login" ? "register" : "login");
+                      setAuthError("");
+                    }}
+                    className="text-wt-orange font-semibold hover:underline"
+                  >
+                    {authMode === "login" ? "Register" : "Login"}
+                  </button>
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ FOOTER (hidden, admin links accessible) ═══ */}
+      <div className="hidden">
+        <button
+          type="button"
+          onClick={() => setCurrentView("admin")}
+          data-ocid="admin.open_modal_button"
+        >
+          Admin Dashboard
+        </button>
+        <button
+          type="button"
+          onClick={() => setAdminModalOpen(true)}
+          data-ocid="admin.button"
+        >
+          API Config
+        </button>
+        <a
+          href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          caffeine.ai
+        </a>
+      </div>
+
+      {/* Visible footer attribution */}
+      <div className="pb-20 pt-3 px-4 text-center">
+        <p className="text-xs text-gray-400">
+          © {new Date().getFullYear()} DRN ML TopUp. Built with ❤️ using{" "}
+          <a
+            href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-wt-orange hover:underline"
+          >
+            caffeine.ai
+          </a>
+        </p>
+        <div className="flex items-center justify-center gap-4 mt-2">
+          <button
+            type="button"
+            onClick={() => setCurrentView("admin")}
+            className="flex items-center gap-1 text-gray-300 hover:text-wt-orange text-[10px] font-semibold transition-colors"
+            data-ocid="footer.admin.open_modal_button"
+          >
+            <ShieldCheck size={10} />
+            Admin Dashboard
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAdminModalOpen(true);
+              loadApiConfig();
+            }}
+            className="flex items-center gap-1 text-gray-300 hover:text-wt-muted text-[10px] font-semibold transition-colors"
+            data-ocid="footer.admin.button"
+          >
+            <Settings size={10} />
+            API Config
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
