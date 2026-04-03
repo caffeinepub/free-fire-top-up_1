@@ -7,38 +7,38 @@
 @layer base {
   :root {
     --radius: 0.75rem;
-    /* Winzer Topup — clean white theme */
-    --background: 0.98 0 0;
-    --foreground: 0.18 0.01 250;
-    --card: 1 0 0;
-    --card-foreground: 0.18 0.01 250;
-    --popover: 1 0 0;
-    --popover-foreground: 0.18 0.01 250;
+    /* Bakuzone — dark gaming theme */
+    --background: 0.08 0.01 250;
+    --foreground: 0.93 0.005 250;
+    --card: 0.11 0.01 250;
+    --card-foreground: 0.93 0.005 250;
+    --popover: 0.11 0.01 250;
+    --popover-foreground: 0.93 0.005 250;
     --primary: 0.65 0.22 35;
     --primary-foreground: 1 0 0;
-    --secondary: 0.95 0.005 250;
-    --secondary-foreground: 0.18 0.01 250;
-    --muted: 0.95 0.005 250;
+    --secondary: 0.15 0.01 250;
+    --secondary-foreground: 0.93 0.005 250;
+    --muted: 0.15 0.01 250;
     --muted-foreground: 0.52 0.01 250;
-    --accent: 0.95 0.005 250;
-    --accent-foreground: 0.18 0.01 250;
+    --accent: 0.15 0.01 250;
+    --accent-foreground: 0.93 0.005 250;
     --destructive: 0.62 0.22 25;
     --destructive-foreground: 1 0 0;
-    --border: 0.91 0.008 250;
-    --input: 0.91 0.008 250;
+    --border: 0.18 0.01 250;
+    --input: 0.18 0.01 250;
     --ring: 0.65 0.22 35;
     --chart-1: 0.65 0.22 35;
     --chart-2: 0.78 0.18 76;
     --chart-3: 0.55 0.18 250;
     --chart-4: 0.62 0.22 25;
     --chart-5: 0.72 0.16 145;
-    --sidebar: 1 0 0;
-    --sidebar-foreground: 0.18 0.01 250;
+    --sidebar: 0.04 0.005 250;
+    --sidebar-foreground: 0.93 0.005 250;
     --sidebar-primary: 0.65 0.22 35;
     --sidebar-primary-foreground: 1 0 0;
-    --sidebar-accent: 0.95 0.005 250;
-    --sidebar-accent-foreground: 0.18 0.01 250;
-    --sidebar-border: 0.91 0.008 250;
+    --sidebar-accent: 0.15 0.01 250;
+    --sidebar-accent-foreground: 0.93 0.005 250;
+    --sidebar-border: 0.18 0.01 250;
     --sidebar-ring: 0.65 0.22 35;
   }
 
@@ -47,22 +47,28 @@
   }
 
   html {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   body {
     @apply bg-background text-foreground;
     font-family: "Plus Jakarta Sans", sans-serif;
+    background-color: #0d1117;
+    color: #e6edf3;
   }
 }
 
 @layer utilities {
   .card-select-ring {
-    box-shadow: 0 0 0 2px #f97316, 0 4px 16px rgba(249, 115, 22, 0.2);
+    box-shadow: 0 0 0 2px #f97316, 0 4px 16px rgba(249, 115, 22, 0.3);
   }
 
   .price-gold {
-    color: #ca8a04;
+    color: #f97316;
+  }
+
+  .price-amber {
+    color: #e3b341;
   }
 
   .btn-orange {
@@ -76,5 +82,16 @@
 
   .bottom-nav-active {
     color: #f97316;
+  }
+
+  .bz-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 1rem;
+  }
+
+  .bz-card-selected {
+    border-color: #f97316;
+    box-shadow: 0 0 20px rgba(249, 115, 22, 0.3);
   }
 }

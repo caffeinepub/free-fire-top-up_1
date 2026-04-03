@@ -66,17 +66,30 @@ export default {
           border: "oklch(var(--sidebar-border))",
           ring: "oklch(var(--sidebar-ring))",
         },
-        /* ── Winzer palette ── */
+        /* ── Bakuzone dark palette ── */
+        bz: {
+          bg: "#0D1117",
+          card: "#161B22",
+          border: "#21262D",
+          "card-hover": "#1C2128",
+          header: "#010409",
+          text: "#E6EDF3",
+          muted: "#7D8590",
+          orange: "#F97316",
+          "orange-dark": "#EA580C",
+          gold: "#E3B341",
+        },
+        /* ── Winzer palette kept for backward compat ── */
         wt: {
           orange: "#F97316",
           "orange-dark": "#EA580C",
-          gold: "#ca8a04",
+          gold: "#E3B341",
           "gold-bright": "#EAB308",
-          surface: "#F8F9FA",
-          border: "#E5E7EB",
-          text: "#1F2937",
-          muted: "#6B7280",
-          "card-bg": "#FFFFFF",
+          surface: "#0D1117",
+          border: "#21262D",
+          text: "#E6EDF3",
+          muted: "#7D8590",
+          "card-bg": "#161B22",
         },
         /* Legacy gamer colors — kept for AdminDashboard compatibility */
         "gamer-bg": "#0A0A0A",
@@ -104,9 +117,10 @@ export default {
       },
       boxShadow: {
         xs: "0 1px 2px 0 rgba(0,0,0,0.05)",
-        card: "0 2px 8px rgba(0,0,0,0.08)",
-        "card-hover": "0 4px 20px rgba(0,0,0,0.12)",
-        "orange-glow": "0 4px 16px rgba(249,115,22,0.3)",
+        card: "0 2px 8px rgba(0,0,0,0.3)",
+        "card-hover": "0 4px 20px rgba(0,0,0,0.5)",
+        "orange-glow": "0 0 20px rgba(249,115,22,0.3)",
+        "bz-glow": "0 0 20px rgba(249,115,22,0.3), 0 0 40px rgba(249,115,22,0.1)",
         /* Legacy */
         "glow-gold": "0 0 20px rgba(255,176,0,0.4), 0 0 6px rgba(255,210,74,0.45)",
         "glow-gold-strong": "0 0 30px rgba(255,176,0,0.6), 0 0 10px rgba(255,210,74,0.7)",

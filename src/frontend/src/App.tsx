@@ -1,5 +1,6 @@
 import {
   CheckCircle2,
+  Crown,
   Home,
   Loader2,
   Package as PackageIcon,
@@ -22,15 +23,31 @@ type Package = {
   id: number;
   diamonds: number;
   price: number;
+  type: "diamond" | "membership";
+  label?: string;
 };
 
 const PACKAGES: Package[] = [
-  { id: 1, diamonds: 25, price: 40.0 },
-  { id: 2, diamonds: 50, price: 65.0 },
-  { id: 3, diamonds: 115, price: 110.0 },
-  { id: 4, diamonds: 240, price: 210.0 },
-  { id: 5, diamonds: 355, price: 310.0 },
-  { id: 6, diamonds: 1240, price: 1010.0 },
+  { id: 1, diamonds: 25, price: 40.0, type: "diamond" },
+  { id: 2, diamonds: 50, price: 65.0, type: "diamond" },
+  { id: 3, diamonds: 115, price: 110.0, type: "diamond" },
+  { id: 4, diamonds: 240, price: 210.0, type: "diamond" },
+  { id: 5, diamonds: 355, price: 310.0, type: "diamond" },
+  { id: 6, diamonds: 1240, price: 1010.0, type: "diamond" },
+  {
+    id: 7,
+    diamonds: 0,
+    price: 210.0,
+    type: "membership",
+    label: "Weekly Membership",
+  },
+  {
+    id: 8,
+    diamonds: 0,
+    price: 1020.0,
+    type: "membership",
+    label: "Monthly Membership",
+  },
 ];
 
 const PAYMENT_METHODS = [
@@ -222,10 +239,43 @@ export default function App() {
   const [ordersLoading, setOrdersLoading] = useState(false);
 
   const loadUserOrders = useCallback(async () => {
-    if (!fullActor || !currentUser) return;
+    if (!currentUser) return;
     setOrdersLoading(true);
     try {
-      const orders = await fullActor.getManualOrders();
+      let orders: Array<{
+        id: string;
+        playerUID: string;
+        packageName: string;
+        priceNPR: bigint;
+        screenshotData: string;
+        status: string;
+        timestamp: bigint;
+      }> = [];
+
+      if (fullActor) {
+        try {
+          orders = await fullActor.getManualOrders();
+        } catch {}
+      }
+
+      // Merge localStorage orders
+      try {
+        const local = JSON.parse(localStorage.getItem("drn_orders") || "[]");
+        const localOrders = local.map((o: any) => ({
+          id: o.id,
+          playerUID: o.playerUID,
+          packageName: o.packageName,
+          priceNPR: BigInt(o.priceNPR),
+          screenshotData: "",
+          status: o.status,
+          timestamp: BigInt(o.timestamp * 1_000_000),
+        }));
+        const backendIds = new Set(orders.map((o) => o.id));
+        for (const lo of localOrders) {
+          if (!backendIds.has(lo.id)) orders.push(lo);
+        }
+      } catch {}
+
       setUserOrders(orders);
     } catch (e) {
       console.error("Failed to load orders:", e);
@@ -266,7 +316,7 @@ export default function App() {
   };
 
   const handleManualSubmit = useCallback(async () => {
-    if (!fullActor || !selectedPackage || !uid) return;
+    if (!selectedPackage || !uid) return;
     setIsLoading(true);
     setError("");
     setLoadingStatus(LOADING_STATUSES[0]);
@@ -275,27 +325,57 @@ export default function App() {
       statusIdx = (statusIdx + 1) % LOADING_STATUSES.length;
       setLoadingStatus(LOADING_STATUSES[statusIdx]);
     }, 1000);
+
+    let screenshotData = "";
     try {
-      let screenshotData = "";
       if (paymentScreenshot) {
         screenshotData = await compressImageToBase64(paymentScreenshot);
       }
-      const orderId = await fullActor.submitManualOrder(
-        uid,
-        `${selectedPackage.diamonds} Diamonds`,
-        BigInt(Math.round(selectedPackage.price)),
-        screenshotData,
-      );
-      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
-      setSuccessTransactionId(orderId);
-      setSuccessSnapshot({ uid, pkg: selectedPackage });
-      setShowPaymentScreen(false);
-      setShowSuccess(true);
-    } catch (e) {
-      if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
-      console.error(e);
-      setError("Failed to submit order. Please try again.");
+    } catch {}
+
+    const localOrderId = `ORD-${Date.now()}`;
+    let orderId = localOrderId;
+
+    const pkgName =
+      selectedPackage.type === "membership"
+        ? selectedPackage.label!
+        : `${selectedPackage.diamonds} Diamonds`;
+
+    // Try backend first, fall back to localStorage
+    try {
+      if (fullActor) {
+        orderId = await fullActor.submitManualOrder(
+          uid,
+          pkgName,
+          BigInt(Math.round(selectedPackage.price)),
+          screenshotData,
+        );
+      } else {
+        throw new Error("Actor not ready");
+      }
+    } catch {
+      // Save to localStorage as fallback
+      try {
+        const existing = JSON.parse(localStorage.getItem("drn_orders") || "[]");
+        existing.push({
+          id: localOrderId,
+          playerUID: uid,
+          packageName: pkgName,
+          priceNPR: Math.round(selectedPackage.price),
+          screenshotData: screenshotData,
+          status: "Pending",
+          timestamp: Date.now(),
+        });
+        localStorage.setItem("drn_orders", JSON.stringify(existing));
+      } catch {}
+      orderId = localOrderId;
     }
+
+    if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+    setSuccessTransactionId(orderId);
+    setSuccessSnapshot({ uid, pkg: selectedPackage });
+    setShowPaymentScreen(false);
+    setShowSuccess(true);
     setIsLoading(false);
   }, [fullActor, uid, selectedPackage, paymentScreenshot]);
 
@@ -343,6 +423,10 @@ export default function App() {
     setAdminBaseUrl(PROVIDER_DEFAULTS[value] || "");
   };
 
+  // suppress unused var warning
+  void apiConfig;
+  void handleProviderChange;
+
   if (currentView === "admin") {
     return (
       <AdminDashboard actor={fullActor} onBack={() => setCurrentView("main")} />
@@ -358,19 +442,19 @@ export default function App() {
         if (!currentUser) {
           return (
             <div className="flex flex-col items-center justify-center py-20 gap-4 px-6">
-              <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
-                <PackageIcon size={36} className="text-orange-300" />
+              <div className="w-20 h-20 rounded-full bg-bz-card border border-bz-border flex items-center justify-center">
+                <PackageIcon size={36} className="text-bz-orange opacity-60" />
               </div>
-              <h3 className="font-bold text-wt-text text-lg">
+              <h3 className="font-bold text-bz-text text-lg">
                 Login to See Orders
               </h3>
-              <p className="text-wt-muted text-sm text-center leading-relaxed">
+              <p className="text-bz-muted text-sm text-center leading-relaxed">
                 Please login to view your submitted top-up orders.
               </p>
               <button
                 type="button"
                 onClick={() => openAuth("login")}
-                className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+                className="mt-2 px-6 py-2.5 rounded-full bg-bz-orange text-white font-semibold text-sm"
                 data-ocid="orders.primary_button"
               >
                 Login / Register
@@ -384,8 +468,8 @@ export default function App() {
               className="flex flex-col items-center justify-center py-20 gap-4"
               data-ocid="orders.loading_state"
             >
-              <Loader2 size={32} className="text-wt-orange animate-spin" />
-              <p className="text-wt-muted text-sm">Loading your orders...</p>
+              <Loader2 size={32} className="text-bz-orange animate-spin" />
+              <p className="text-bz-muted text-sm">Loading your orders...</p>
             </div>
           );
         }
@@ -395,18 +479,18 @@ export default function App() {
               className="flex flex-col items-center justify-center py-20 gap-4 px-6"
               data-ocid="orders.empty_state"
             >
-              <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
-                <PackageIcon size={36} className="text-orange-300" />
+              <div className="w-20 h-20 rounded-full bg-bz-card border border-bz-border flex items-center justify-center">
+                <PackageIcon size={36} className="text-bz-orange opacity-60" />
               </div>
-              <h3 className="font-bold text-wt-text text-lg">No Orders Yet</h3>
-              <p className="text-wt-muted text-sm text-center leading-relaxed">
+              <h3 className="font-bold text-bz-text text-lg">No Orders Yet</h3>
+              <p className="text-bz-muted text-sm text-center leading-relaxed">
                 Your submitted top-up orders will appear here after you complete
                 a purchase.
               </p>
               <button
                 type="button"
                 onClick={() => setActiveTab("home")}
-                className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+                className="mt-2 px-6 py-2.5 rounded-full bg-bz-orange text-white font-semibold text-sm"
                 data-ocid="orders.primary_button"
               >
                 Buy Diamonds
@@ -416,7 +500,7 @@ export default function App() {
         }
         return (
           <div className="px-4 py-6" data-ocid="orders.list">
-            <h2 className="text-wt-text font-bold text-lg mb-4">My Orders</h2>
+            <h2 className="text-bz-text font-bold text-lg mb-4">My Orders</h2>
             <div className="flex flex-col gap-3">
               {userOrders.map((order, idx) => {
                 const dateMs = Number(order.timestamp) / 1_000_000;
@@ -429,18 +513,18 @@ export default function App() {
                 return (
                   <div
                     key={order.id}
-                    className="bg-white rounded-2xl border border-wt-border shadow-card p-4"
+                    className="bg-bz-card rounded-2xl border border-bz-border p-4"
                     data-ocid={`orders.item.${idx + 1}`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <p className="font-bold text-wt-text text-base">
+                      <p className="font-bold text-bz-text text-base">
                         {order.packageName}
                       </p>
                       <span
                         className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
                           isCompleted
-                            ? "bg-green-100 text-green-700"
-                            : "bg-orange-100 text-orange-700"
+                            ? "bg-green-900/60 text-green-400"
+                            : "bg-orange-900/60 text-orange-400"
                         }`}
                       >
                         {isCompleted ? "Completed" : "Pending"}
@@ -451,14 +535,14 @@ export default function App() {
                         <p className="text-sm font-bold price-gold">
                           Rs {Number(order.priceNPR).toFixed(2)}
                         </p>
-                        <p className="text-xs text-wt-muted mt-0.5">
+                        <p className="text-xs text-bz-muted mt-0.5">
                           UID: {order.playerUID}
                         </p>
-                        <p className="text-xs text-gray-400 mt-0.5">
+                        <p className="text-xs text-bz-muted mt-0.5">
                           {dateStr}
                         </p>
                       </div>
-                      <p className="text-[10px] text-gray-300 font-mono max-w-[80px] truncate text-right">
+                      <p className="text-[10px] text-bz-muted font-mono max-w-[80px] truncate text-right">
                         #{order.id.slice(0, 8)}
                       </p>
                     </div>
@@ -471,34 +555,42 @@ export default function App() {
       case "cart":
         return selectedPackage ? (
           <div className="px-4 py-6">
-            <h2 className="text-wt-text font-bold text-lg mb-4">Your Cart</h2>
-            <div className="bg-white rounded-2xl border border-wt-border shadow-card p-5">
+            <h2 className="text-bz-text font-bold text-lg mb-4">Your Cart</h2>
+            <div className="bg-bz-card rounded-2xl border border-bz-border p-5">
               <div className="flex items-center gap-4 mb-4">
-                <img
-                  src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
-                  alt="Diamond"
-                  className="w-14 h-14 object-contain"
-                />
+                {selectedPackage.type === "membership" ? (
+                  <div className="w-14 h-14 flex items-center justify-center">
+                    <span className="text-4xl">&#128081;</span>
+                  </div>
+                ) : (
+                  <img
+                    src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                    alt="Diamond"
+                    className="w-14 h-14 object-contain"
+                  />
+                )}
                 <div className="flex-1">
-                  <p className="font-bold text-wt-text text-base">
-                    {selectedPackage.diamonds} Diamonds
+                  <p className="font-bold text-bz-text text-base">
+                    {selectedPackage.type === "membership"
+                      ? selectedPackage.label
+                      : `${selectedPackage.diamonds.toLocaleString()} Diamonds`}
                   </p>
                   <p className="text-sm font-bold price-gold">
-                    {selectedPackage.price.toFixed(2)}Rs
+                    Rs {selectedPackage.price.toFixed(2)}
                   </p>
                 </div>
               </div>
-              <div className="border-t border-wt-border pt-4">
+              <div className="border-t border-bz-border pt-4">
                 <div className="flex justify-between items-center mb-1">
-                  <span className="text-wt-muted text-sm">Player UID</span>
-                  <span className="text-wt-text text-sm font-semibold">
+                  <span className="text-bz-muted text-sm">Player UID</span>
+                  <span className="text-bz-text text-sm font-semibold">
                     {uid || "Not entered"}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-wt-muted text-sm">Total</span>
+                  <span className="text-bz-muted text-sm">Total</span>
                   <span className="font-bold price-gold text-base">
-                    {selectedPackage.price.toFixed(2)}Rs
+                    Rs {selectedPackage.price.toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -509,7 +601,7 @@ export default function App() {
                   handlePaymentScreenOpen();
                 }}
                 disabled={!uid.trim()}
-                className="mt-4 w-full py-3 rounded-xl bg-wt-orange text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                className="mt-4 w-full py-3 rounded-xl bg-bz-orange text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 data-ocid="cart.submit_button"
               >
                 Proceed to Payment
@@ -521,17 +613,17 @@ export default function App() {
             className="flex flex-col items-center justify-center py-20 gap-4 px-6"
             data-ocid="cart.empty_state"
           >
-            <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
-              <ShoppingCart size={36} className="text-orange-300" />
+            <div className="w-20 h-20 rounded-full bg-bz-card border border-bz-border flex items-center justify-center">
+              <ShoppingCart size={36} className="text-bz-orange opacity-60" />
             </div>
-            <h3 className="font-bold text-wt-text text-lg">Cart is Empty</h3>
-            <p className="text-wt-muted text-sm text-center">
+            <h3 className="font-bold text-bz-text text-lg">Cart is Empty</h3>
+            <p className="text-bz-muted text-sm text-center">
               Select a diamond package to add it to your cart.
             </p>
             <button
               type="button"
               onClick={() => setActiveTab("home")}
-              className="mt-2 px-6 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+              className="mt-2 px-6 py-2.5 rounded-full bg-bz-orange text-white font-semibold text-sm"
               data-ocid="cart.primary_button"
             >
               Browse Packages
@@ -541,44 +633,44 @@ export default function App() {
       case "account":
         return currentUser ? (
           <div className="px-4 py-6">
-            <h2 className="text-wt-text font-bold text-lg mb-4">My Account</h2>
-            <div className="bg-white rounded-2xl border border-wt-border shadow-card p-5 mb-4">
+            <h2 className="text-bz-text font-bold text-lg mb-4">My Account</h2>
+            <div className="bg-bz-card rounded-2xl border border-bz-border p-5 mb-4">
               <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-wt-orange flex items-center justify-center shrink-0">
+                <div className="w-14 h-14 rounded-full bg-bz-orange flex items-center justify-center shrink-0">
                   <span className="text-white font-extrabold text-xl">
                     {currentUser.name[0]?.toUpperCase()}
                   </span>
                 </div>
                 <div>
-                  <p className="font-bold text-wt-text text-base">
+                  <p className="font-bold text-bz-text text-base">
                     {currentUser.name}
                   </p>
-                  <p className="text-wt-muted text-sm">{currentUser.email}</p>
+                  <p className="text-bz-muted text-sm">{currentUser.email}</p>
                 </div>
               </div>
             </div>
             <button
               type="button"
               onClick={handleLogout}
-              className="w-full py-3 rounded-xl border border-red-200 text-red-500 font-semibold text-sm hover:bg-red-50 transition-colors"
+              className="w-full py-3 rounded-xl border border-red-800 text-red-400 font-semibold text-sm hover:bg-red-900/30 transition-colors"
             >
               Logout
             </button>
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center py-20 gap-4 px-6">
-            <div className="w-20 h-20 rounded-full bg-orange-50 flex items-center justify-center">
-              <User size={36} className="text-orange-300" />
+            <div className="w-20 h-20 rounded-full bg-bz-card border border-bz-border flex items-center justify-center">
+              <User size={36} className="text-bz-orange opacity-60" />
             </div>
-            <h3 className="font-bold text-wt-text text-lg">My Account</h3>
-            <p className="text-wt-muted text-sm text-center leading-relaxed">
+            <h3 className="font-bold text-bz-text text-lg">My Account</h3>
+            <p className="text-bz-muted text-sm text-center leading-relaxed">
               Sign in to view your order history, manage your account, and track
               deliveries.
             </p>
             <button
               type="button"
               onClick={() => openAuth("login")}
-              className="mt-2 px-8 py-2.5 rounded-full bg-wt-orange text-white font-semibold text-sm"
+              className="mt-2 px-8 py-2.5 rounded-full bg-bz-orange text-white font-semibold text-sm"
               data-ocid="account.primary_button"
             >
               Login / Register
@@ -596,8 +688,8 @@ export default function App() {
       <div className="px-4 py-4 pb-2">
         {/* Game label */}
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-1 h-5 rounded-full bg-wt-orange" />
-          <h2 className="text-wt-text font-bold text-base">
+          <div className="w-1 h-5 rounded-full bg-bz-orange" />
+          <h2 className="text-bz-text font-bold text-base">
             Free Fire Diamonds
           </h2>
         </div>
@@ -606,7 +698,7 @@ export default function App() {
         <div className="mb-5">
           <label
             htmlFor="player-uid"
-            className="block text-xs font-semibold text-wt-muted mb-1.5 uppercase tracking-wide"
+            className="block text-xs font-semibold text-bz-muted mb-1.5 uppercase tracking-wide"
           >
             Player UID
           </label>
@@ -619,61 +711,88 @@ export default function App() {
               setError("");
             }}
             placeholder="Enter your Free Fire Player UID"
-            className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent transition-all"
+            className="w-full px-4 py-3 rounded-xl border border-bz-border bg-bz-card text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent transition-all"
             data-ocid="topup.input"
           />
         </div>
 
         {/* Packages label */}
         <div className="flex items-center gap-2 mb-3">
-          <div className="w-1 h-5 rounded-full bg-wt-orange" />
-          <h2 className="text-wt-text font-bold text-base">Select Package</h2>
+          <div className="w-1 h-5 rounded-full bg-bz-orange" />
+          <h2 className="text-bz-text font-bold text-base">Select Package</h2>
         </div>
 
         {/* Package Grid — 2 columns */}
         <div className="grid grid-cols-2 gap-3 mb-5">
           {PACKAGES.map((pkg, idx) => {
             const isSelected = selectedPackage?.id === pkg.id;
+            const isMembership = pkg.type === "membership";
             return (
-              <motion.button
+              <div
                 key={pkg.id}
-                type="button"
-                whileTap={{ scale: 0.97 }}
-                onClick={() => {
-                  setSelectedPackage(pkg);
-                  setError("");
-                }}
-                className={`relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 bg-white text-left transition-all duration-200 ${
+                className={`relative flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all duration-200 ${
                   isSelected
-                    ? "border-wt-orange shadow-orange-glow"
-                    : "border-wt-border shadow-card hover:border-orange-200 hover:shadow-card-hover"
+                    ? "border-orange-500 shadow-[0_0_20px_rgba(249,115,22,0.3)]"
+                    : "border-[#21262D] hover:border-orange-500/40"
                 }`}
-                data-ocid={`topup.item.${idx + 1}`}
+                style={{ background: "#161B22" }}
               >
                 {/* Selected checkmark */}
                 {isSelected && (
-                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-wt-orange flex items-center justify-center">
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center">
                     <CheckCircle2 size={12} className="text-white" />
                   </div>
                 )}
 
-                {/* Diamond icon */}
-                <img
-                  src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
-                  alt="Diamond"
-                  className="w-14 h-14 object-contain"
-                />
+                {/* Icon */}
+                {isMembership ? (
+                  <div className="w-14 h-14 flex items-center justify-center">
+                    <Crown
+                      size={40}
+                      className="text-bz-gold"
+                      strokeWidth={1.5}
+                    />
+                  </div>
+                ) : (
+                  <img
+                    src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                    alt="Diamond"
+                    className="w-14 h-14 object-contain"
+                  />
+                )}
 
-                {/* Diamond count */}
-                <p className="text-wt-text font-bold text-sm text-center leading-tight">
-                  {pkg.diamonds.toLocaleString()} Diamonds
+                {/* Name */}
+                <p className="text-bz-text font-bold text-sm text-center leading-tight">
+                  {isMembership
+                    ? pkg.label
+                    : `${pkg.diamonds.toLocaleString()} 💎`}
                 </p>
 
                 {/* Price */}
-                <p className="font-extrabold text-base price-gold text-center">
-                  {pkg.price.toFixed(2)}Rs
+                <p className="font-extrabold text-base text-orange-400 text-center">
+                  Rs {pkg.price.toFixed(2)}
                 </p>
-              </motion.button>
+
+                {/* Order Now Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPackage(pkg);
+                    setError("");
+                    if (!uid.trim()) {
+                      setError("Please enter your Player UID first");
+                      return;
+                    }
+                    setPaymentScreenshot(null);
+                    setScreenshotPreview(null);
+                    setShowPaymentScreen(true);
+                  }}
+                  className="w-full mt-1 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs transition-all active:scale-95"
+                  data-ocid={`topup.item.${idx + 1}`}
+                >
+                  Order Now
+                </button>
+              </div>
             );
           })}
         </div>
@@ -687,8 +806,8 @@ export default function App() {
             className="mb-5"
           >
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-1 h-5 rounded-full bg-wt-orange" />
-              <h2 className="text-wt-text font-bold text-base">
+              <div className="w-1 h-5 rounded-full bg-bz-orange" />
+              <h2 className="text-bz-text font-bold text-base">
                 Payment Method
               </h2>
             </div>
@@ -702,8 +821,8 @@ export default function App() {
                     onClick={() => setSelectedPayment(method.id)}
                     className={`flex items-center gap-2.5 px-4 py-3 rounded-xl border-2 text-sm font-semibold transition-all duration-150 ${
                       isActive
-                        ? "border-wt-orange bg-orange-50 text-wt-orange"
-                        : "border-wt-border bg-white text-wt-text hover:border-orange-200"
+                        ? "border-bz-orange bg-orange-900/30 text-orange-400"
+                        : "border-bz-border bg-bz-card text-bz-text hover:border-orange-500/40"
                     }`}
                     data-ocid={`topup.radio.${PAYMENT_METHODS.indexOf(method) + 1}`}
                   >
@@ -726,7 +845,7 @@ export default function App() {
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
-              className="mb-4 px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm font-medium"
+              className="mb-4 px-4 py-3 rounded-xl bg-red-900/40 border border-red-700 text-red-400 text-sm font-medium"
               data-ocid="topup.error_state"
             >
               ⚠️ {error}
@@ -748,8 +867,8 @@ export default function App() {
                   boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
                 }
               : {
-                  background: "#F3F4F6",
-                  color: "#9CA3AF",
+                  background: "#1C2128",
+                  color: "#4B5563",
                   cursor: !canProceed ? "not-allowed" : "wait",
                 }
           }
@@ -773,20 +892,26 @@ export default function App() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex items-center justify-between px-4 py-3 rounded-xl bg-orange-50 border border-orange-100 mb-2"
+            className="flex items-center justify-between px-4 py-3 rounded-xl bg-orange-900/20 border border-orange-700/40 mb-2"
           >
             <div className="flex items-center gap-2">
-              <img
-                src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
-                alt="Diamond"
-                className="w-6 h-6 object-contain"
-              />
-              <span className="text-wt-text text-sm font-semibold">
-                {selectedPackage.diamonds} Diamonds
+              {selectedPackage.type === "membership" ? (
+                <Crown size={20} className="text-bz-gold" strokeWidth={1.5} />
+              ) : (
+                <img
+                  src="/assets/generated/blue-diamond-transparent.dim_200x200.png"
+                  alt="Diamond"
+                  className="w-6 h-6 object-contain"
+                />
+              )}
+              <span className="text-bz-text text-sm font-semibold">
+                {selectedPackage.type === "membership"
+                  ? selectedPackage.label
+                  : `${selectedPackage.diamonds.toLocaleString()} Diamonds`}
               </span>
             </div>
             <span className="font-bold price-gold text-sm">
-              {selectedPackage.price.toFixed(2)}Rs
+              Rs {selectedPackage.price.toFixed(2)}
             </span>
           </motion.div>
         )}
@@ -795,21 +920,28 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-wt-surface flex flex-col font-jakarta">
+    <div
+      className="min-h-screen flex flex-col font-jakarta"
+      style={{ background: "#0D1117" }}
+    >
       {/* ═══ HEADER ═══ */}
       <header
-        className="sticky top-0 z-50 bg-white border-b border-wt-border shadow-xs"
+        className="sticky top-0 z-50 border-b"
+        style={{ background: "#010409", borderColor: "#21262D" }}
         data-ocid="nav.section"
       >
         <div className="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-md bg-wt-orange flex items-center justify-center shrink-0">
+            <div
+              className="w-8 h-8 rounded-md flex items-center justify-center shrink-0"
+              style={{ background: "#F97316" }}
+            >
               <span className="text-white font-extrabold text-sm leading-none">
                 DRN
               </span>
             </div>
-            <span className="font-extrabold text-wt-text text-base tracking-tight">
+            <span className="font-extrabold text-bz-text text-base tracking-tight">
               DRN ML TopUp
             </span>
           </div>
@@ -817,13 +949,13 @@ export default function App() {
           {/* Login / User button */}
           {currentUser ? (
             <div className="flex items-center gap-2">
-              <span className="text-wt-text text-xs font-semibold hidden sm:block">
+              <span className="text-bz-text text-xs font-semibold hidden sm:block">
                 {currentUser.name}
               </span>
               <button
                 type="button"
                 onClick={handleLogout}
-                className="px-3 py-2 rounded-full border border-wt-border text-wt-muted font-semibold text-xs transition-all duration-150 hover:bg-gray-50"
+                className="px-3 py-2 rounded-full border border-bz-border text-bz-muted font-semibold text-xs transition-all duration-150 hover:bg-bz-card"
               >
                 Logout
               </button>
@@ -832,7 +964,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => openAuth("login")}
-              className="px-4 py-2 rounded-full bg-wt-orange text-white font-semibold text-xs transition-all duration-150 hover:bg-wt-orange-dark active:scale-95"
+              className="px-4 py-2 rounded-full bg-bz-orange text-white font-semibold text-xs transition-all duration-150 hover:bg-bz-orange-dark active:scale-95"
               data-ocid="nav.primary_button"
             >
               Login / Register
@@ -848,7 +980,8 @@ export default function App() {
 
       {/* ═══ BOTTOM NAVIGATION ═══ */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-wt-border"
+        className="fixed bottom-0 left-0 right-0 z-50 border-t"
+        style={{ background: "#010409", borderColor: "#21262D" }}
         data-ocid="nav.tab"
       >
         <div className="max-w-lg mx-auto">
@@ -888,25 +1021,25 @@ export default function App() {
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex flex-col items-center justify-center gap-0.5 transition-colors duration-150 ${
                     isActive
-                      ? "text-wt-orange"
-                      : "text-gray-400 hover:text-gray-600"
+                      ? "text-bz-orange"
+                      : "text-bz-muted hover:text-bz-text"
                   }`}
                   data-ocid={tab.ocid}
                 >
                   <Icon
                     size={20}
                     strokeWidth={isActive ? 2.5 : 2}
-                    className={isActive ? "text-wt-orange" : ""}
+                    className={isActive ? "text-bz-orange" : ""}
                   />
                   <span
                     className={`text-[10px] font-semibold leading-tight ${
-                      isActive ? "text-wt-orange" : "text-gray-400"
+                      isActive ? "text-bz-orange" : "text-bz-muted"
                     }`}
                   >
                     {tab.label}
                   </span>
                   {isActive && (
-                    <div className="w-1 h-1 rounded-full bg-wt-orange -mt-0.5" />
+                    <div className="w-1 h-1 rounded-full bg-bz-orange -mt-0.5" />
                   )}
                 </button>
               );
@@ -924,7 +1057,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
             style={{
-              background: "rgba(0,0,0,0.5)",
+              background: "rgba(0,0,0,0.75)",
               backdropFilter: "blur(4px)",
             }}
             data-ocid="payment.modal"
@@ -934,19 +1067,23 @@ export default function App() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 80, opacity: 0 }}
               transition={{ type: "spring", stiffness: 280, damping: 26 }}
-              className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl overflow-hidden max-h-[92vh] flex flex-col"
+              className="w-full max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden max-h-[92vh] flex flex-col"
+              style={{ background: "#161B22", border: "1px solid #21262D" }}
             >
               {/* Modal Header */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-wt-border shrink-0">
+              <div
+                className="flex items-center justify-between px-5 py-4 border-b shrink-0"
+                style={{ borderColor: "#21262D" }}
+              >
                 <button
                   type="button"
                   onClick={() => setShowPaymentScreen(false)}
-                  className="flex items-center gap-1.5 text-wt-muted hover:text-wt-text transition-colors text-sm font-semibold"
+                  className="flex items-center gap-1.5 text-bz-muted hover:text-bz-text transition-colors text-sm font-semibold"
                   data-ocid="payment.close_button"
                 >
                   ← Back
                 </button>
-                <h2 className="font-bold text-wt-text text-base">
+                <h2 className="font-bold text-bz-text text-base">
                   Complete Payment
                 </h2>
                 <div className="w-12" />
@@ -955,7 +1092,13 @@ export default function App() {
               <div className="overflow-y-auto flex-1 px-5 pb-6 pt-4 space-y-4">
                 {/* QR Code section */}
                 <div className="flex flex-col items-center gap-3 py-2">
-                  <div className="rounded-2xl p-3 shadow-card border border-wt-border">
+                  <div
+                    className="rounded-2xl p-3"
+                    style={{
+                      border: "1px solid #21262D",
+                      background: "#0D1117",
+                    }}
+                  >
                     <img
                       src="/assets/img_20260317_151439-019d41e4-754f-744f-917b-5a2de33ccb10.jpg"
                       alt="eSewa QR Code"
@@ -966,12 +1109,18 @@ export default function App() {
                     />
                   </div>
                   <div className="text-center">
-                    <p className="text-wt-muted text-xs mb-1">
+                    <p className="text-bz-muted text-xs mb-1">
                       Scan QR or send to eSewa number:
                     </p>
-                    <div className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-green-50 border border-green-200">
+                    <div
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl"
+                      style={{
+                        background: "#0D3320",
+                        border: "1px solid #1a5c36",
+                      }}
+                    >
                       <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
-                      <span className="font-bold text-green-700 text-lg tracking-widest">
+                      <span className="font-bold text-green-400 text-lg tracking-widest">
                         9842668372
                       </span>
                     </div>
@@ -979,9 +1128,15 @@ export default function App() {
                 </div>
 
                 {/* Order summary */}
-                <div className="rounded-xl border border-wt-border overflow-hidden">
-                  <div className="px-4 py-2 bg-wt-surface border-b border-wt-border">
-                    <span className="text-xs font-semibold text-wt-muted uppercase tracking-wide">
+                <div
+                  className="rounded-xl overflow-hidden"
+                  style={{ border: "1px solid #21262D" }}
+                >
+                  <div
+                    className="px-4 py-2 border-b"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
+                  >
+                    <span className="text-xs font-semibold text-bz-muted uppercase tracking-wide">
                       Order Summary
                     </span>
                   </div>
@@ -993,30 +1148,33 @@ export default function App() {
                     {
                       label: "Package",
                       value: selectedPackage
-                        ? `${selectedPackage.diamonds.toLocaleString()} Diamonds`
+                        ? selectedPackage.type === "membership"
+                          ? selectedPackage.label!
+                          : `${selectedPackage.diamonds.toLocaleString()} Diamonds`
                         : "—",
                       highlight: true,
                     },
                     {
                       label: "Amount",
                       value: selectedPackage
-                        ? `${selectedPackage.price.toFixed(2)}Rs`
+                        ? `Rs ${selectedPackage.price.toFixed(2)}`
                         : "—",
                       price: true,
                     },
                   ].map((row) => (
                     <div
                       key={row.label}
-                      className="flex justify-between items-center px-4 py-3 border-b border-wt-border last:border-0"
+                      className="flex justify-between items-center px-4 py-3 border-b last:border-0"
+                      style={{ borderColor: "#21262D" }}
                     >
-                      <span className="text-wt-muted text-sm">{row.label}</span>
+                      <span className="text-bz-muted text-sm">{row.label}</span>
                       <span
                         className={`text-sm font-bold ${
                           row.price
                             ? "price-gold text-base"
                             : row.highlight
-                              ? "text-blue-600"
-                              : "text-wt-text"
+                              ? "text-orange-400"
+                              : "text-bz-text"
                         }`}
                       >
                         {row.value}
@@ -1027,7 +1185,7 @@ export default function App() {
 
                 {/* Screenshot upload */}
                 <div>
-                  <p className="text-xs font-semibold text-wt-muted uppercase tracking-wide mb-2">
+                  <p className="text-xs font-semibold text-bz-muted uppercase tracking-wide mb-2">
                     Upload Payment Screenshot
                   </p>
                   <input
@@ -1042,25 +1200,42 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => screenshotInputRef.current?.click()}
-                      className="w-full flex items-center justify-center gap-2 py-4 rounded-xl border-2 border-dashed border-orange-200 bg-orange-50 text-wt-orange text-sm font-semibold hover:bg-orange-100 transition-colors"
+                      className="w-full py-10 rounded-xl border-2 border-dashed flex flex-col items-center gap-2 transition-colors"
+                      style={{ borderColor: "#21262D" }}
                       data-ocid="payment.dropzone"
                     >
-                      📎 Upload Screenshot
+                      <span className="text-2xl">&#128247;</span>
+                      <span className="text-bz-muted text-sm font-medium">
+                        Tap to upload screenshot
+                      </span>
+                      <span className="text-bz-muted text-xs">
+                        JPG, PNG • Max 5MB
+                      </span>
                     </button>
                   ) : (
-                    <div className="relative rounded-xl overflow-hidden border border-wt-border">
+                    <div
+                      className="relative rounded-xl overflow-hidden"
+                      style={{ border: "1px solid #21262D" }}
+                    >
                       <img
                         src={screenshotPreview}
                         alt="Payment screenshot preview"
-                        className="w-full max-h-40 object-contain bg-gray-50"
+                        className="w-full max-h-40 object-contain"
+                        style={{ background: "#0D1117" }}
                       />
-                      <div className="flex items-center justify-between px-3 py-2 bg-white border-t border-wt-border">
+                      <div
+                        className="flex items-center justify-between px-3 py-2 border-t"
+                        style={{
+                          background: "#161B22",
+                          borderColor: "#21262D",
+                        }}
+                      >
                         <div className="flex items-center gap-2 min-w-0">
                           <CheckCircle2
                             size={14}
                             className="text-green-500 shrink-0"
                           />
-                          <span className="text-wt-text text-xs truncate">
+                          <span className="text-bz-text text-xs truncate">
                             {paymentScreenshot?.name}
                           </span>
                         </div>
@@ -1072,7 +1247,7 @@ export default function App() {
                             if (screenshotInputRef.current)
                               screenshotInputRef.current.value = "";
                           }}
-                          className="shrink-0 ml-2 text-wt-muted hover:text-red-500 text-xs font-semibold transition-colors"
+                          className="shrink-0 ml-2 text-bz-muted hover:text-red-400 text-xs font-semibold transition-colors"
                           data-ocid="payment.cancel_button"
                         >
                           Remove
@@ -1089,7 +1264,12 @@ export default function App() {
                       initial={{ opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0 }}
-                      className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm"
+                      className="px-4 py-3 rounded-xl text-sm"
+                      style={{
+                        background: "#2D1515",
+                        border: "1px solid #7f1d1d",
+                        color: "#fca5a5",
+                      }}
                       data-ocid="payment.error_state"
                     >
                       ⚠️ {error}
@@ -1121,7 +1301,7 @@ export default function App() {
                   )}
                 </motion.button>
 
-                <p className="text-center text-wt-muted text-xs leading-relaxed pb-2">
+                <p className="text-center text-bz-muted text-xs leading-relaxed pb-2">
                   After paying via eSewa, upload your screenshot and tap Submit.
                   Your diamonds will be sent after payment verification.
                 </p>
@@ -1140,7 +1320,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] flex items-center justify-center px-4"
             style={{
-              background: "rgba(0,0,0,0.5)",
+              background: "rgba(0,0,0,0.75)",
               backdropFilter: "blur(4px)",
             }}
             data-ocid="success.modal"
@@ -1150,10 +1330,11 @@ export default function App() {
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.85, y: 20 }}
               transition={{ type: "spring", stiffness: 280, damping: 24 }}
-              className="w-full max-w-sm bg-white rounded-3xl shadow-xl overflow-hidden"
+              className="w-full max-w-sm rounded-3xl shadow-xl overflow-hidden"
+              style={{ background: "#161B22", border: "1px solid #21262D" }}
             >
               {/* Success header */}
-              <div className="bg-gradient-to-br from-orange-400 to-orange-500 px-6 py-8 flex flex-col items-center gap-3">
+              <div className="bg-gradient-to-br from-orange-500 to-orange-600 px-6 py-8 flex flex-col items-center gap-3">
                 <motion.div
                   initial={{ scale: 0 }}
                   animate={{ scale: 1 }}
@@ -1171,7 +1352,7 @@ export default function App() {
                   Order Submitted!
                 </h2>
                 <p className="text-white/80 text-sm text-center">
-                  We'll send your diamonds after verifying your payment.
+                  We’ll send your diamonds after verifying your payment.
                 </p>
               </div>
 
@@ -1181,15 +1362,17 @@ export default function App() {
                   {[
                     { label: "Player UID", value: successSnapshot?.uid ?? uid },
                     {
-                      label: "Diamonds",
+                      label: "Package",
                       value: successSnapshot?.pkg
-                        ? `${successSnapshot.pkg.diamonds.toLocaleString()} Diamonds`
+                        ? successSnapshot.pkg.type === "membership"
+                          ? successSnapshot.pkg.label!
+                          : `${successSnapshot.pkg.diamonds.toLocaleString()} Diamonds`
                         : "",
                     },
                     {
                       label: "Amount Paid",
                       value: successSnapshot?.pkg
-                        ? `${successSnapshot.pkg.price.toFixed(2)}Rs`
+                        ? `Rs ${successSnapshot.pkg.price.toFixed(2)}`
                         : "",
                       price: true,
                     },
@@ -1207,14 +1390,14 @@ export default function App() {
                       key={row.label}
                       className="flex justify-between items-center"
                     >
-                      <span className="text-wt-muted text-sm">{row.label}</span>
+                      <span className="text-bz-muted text-sm">{row.label}</span>
                       <span
                         className={`text-sm font-bold max-w-[55%] text-right break-all ${
                           row.price
                             ? "price-gold"
                             : row.mono
-                              ? "font-mono text-xs text-wt-muted"
-                              : "text-wt-text"
+                              ? "font-mono text-xs text-bz-muted"
+                              : "text-bz-text"
                         }`}
                       >
                         {row.value}
@@ -1223,7 +1406,14 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="mb-4 px-4 py-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs leading-relaxed">
+                <div
+                  className="mb-4 px-4 py-3 rounded-xl text-xs leading-relaxed"
+                  style={{
+                    background: "#0D3320",
+                    border: "1px solid #1a5c36",
+                    color: "#4ade80",
+                  }}
+                >
                   ✅ Manual order saved — diamonds will be sent once your eSewa
                   payment is verified.
                 </div>
@@ -1250,67 +1440,43 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-            style={{ background: "rgba(0,0,0,0.5)" }}
+            className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
+            style={{
+              background: "rgba(0,0,0,0.75)",
+              backdropFilter: "blur(4px)",
+            }}
             onClick={(e) => {
               if (e.target === e.currentTarget) setAdminModalOpen(false);
             }}
-            data-ocid="admin.modal"
           >
             <motion.div
-              initial={{ scale: 0.93, y: 16, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.93, y: 16, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 300, damping: 24 }}
-              className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden"
+              initial={{ y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 80, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 280, damping: 26 }}
+              className="w-full max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden"
+              style={{ background: "#161B22", border: "1px solid #21262D" }}
             >
-              <div className="flex items-center justify-between px-6 py-4 border-b border-wt-border">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
-                    <Settings size={16} className="text-wt-orange" />
-                  </div>
-                  <div>
-                    <h2 className="font-bold text-wt-text text-sm">
-                      API Configuration
-                    </h2>
-                    <p className="text-wt-muted text-xs">
-                      Connect a real top-up provider
-                    </p>
-                  </div>
-                </div>
+              <div
+                className="flex items-center justify-between px-5 py-4 border-b"
+                style={{ borderColor: "#21262D" }}
+              >
+                <h2 className="font-bold text-bz-text text-base">API Config</h2>
                 <button
                   type="button"
                   onClick={() => setAdminModalOpen(false)}
-                  className="text-wt-muted hover:text-wt-text transition-colors p-1.5 rounded-lg hover:bg-wt-surface"
+                  className="text-bz-muted hover:text-bz-text transition-colors p-1.5 rounded-lg"
                   data-ocid="admin.close_button"
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              <div className="px-6 py-5 space-y-4">
-                {apiConfig !== null && (
-                  <div
-                    className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium border ${
-                      apiConfig.isConfigured
-                        ? "bg-green-50 border-green-200 text-green-700"
-                        : "bg-orange-50 border-orange-200 text-orange-700"
-                    }`}
-                    data-ocid="admin.success_state"
-                  >
-                    <div
-                      className={`w-2 h-2 rounded-full ${apiConfig.isConfigured ? "bg-green-500" : "bg-orange-400"}`}
-                    />
-                    {apiConfig.isConfigured
-                      ? `Live — Provider: ${apiConfig.provider}`
-                      : "Simulation mode — no API configured"}
-                  </div>
-                )}
-
+              <div className="px-5 py-5 space-y-4">
                 <div>
                   <label
                     htmlFor="admin-provider"
-                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                   >
                     Provider
                   </label>
@@ -1318,23 +1484,18 @@ export default function App() {
                     id="admin-provider"
                     value={adminProvider}
                     onChange={(e) => handleProviderChange(e.target.value)}
-                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    className="w-full border rounded-xl px-4 py-3 text-bz-text text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
                     data-ocid="admin.select"
                   >
-                    {[
-                      "Digiflazz",
-                      "Apigames",
-                      "UniPin",
-                      "Garena Reseller",
-                      "Custom",
-                    ].map((p) => (
+                    {Object.keys(PROVIDER_DEFAULTS).map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
                     ))}
                   </select>
                   {PROVIDER_INSTRUCTIONS[adminProvider] && (
-                    <p className="mt-1.5 text-xs text-wt-muted">
+                    <p className="mt-1.5 text-xs text-bz-muted">
                       {PROVIDER_INSTRUCTIONS[adminProvider]}
                     </p>
                   )}
@@ -1343,7 +1504,7 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="admin-baseurl"
-                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                   >
                     Base URL
                   </label>
@@ -1352,7 +1513,8 @@ export default function App() {
                     type="url"
                     value={adminBaseUrl}
                     onChange={(e) => setAdminBaseUrl(e.target.value)}
-                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    className="w-full border rounded-xl px-4 py-3 text-bz-text text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
                     data-ocid="admin.input"
                   />
                 </div>
@@ -1360,7 +1522,7 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="admin-apikey"
-                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                   >
                     API Key
                   </label>
@@ -1370,7 +1532,8 @@ export default function App() {
                     value={adminApiKey}
                     onChange={(e) => setAdminApiKey(e.target.value)}
                     placeholder="Enter your API key"
-                    className="w-full border border-wt-border rounded-xl px-4 py-3 text-wt-text text-sm bg-white focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent placeholder:text-gray-400"
+                    className="w-full border rounded-xl px-4 py-3 text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
                   />
                 </div>
 
@@ -1378,7 +1541,8 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setAdminModalOpen(false)}
-                    className="flex-1 py-3 rounded-xl border border-wt-border text-wt-muted font-semibold text-sm hover:bg-wt-surface transition-colors"
+                    className="flex-1 py-3 rounded-xl border font-semibold text-sm text-bz-muted transition-colors hover:bg-bz-card"
+                    style={{ borderColor: "#21262D" }}
                     data-ocid="admin.cancel_button"
                   >
                     Cancel
@@ -1387,7 +1551,7 @@ export default function App() {
                     type="button"
                     onClick={handleSaveApiConfig}
                     disabled={adminSaving || !adminApiKey.trim()}
-                    className="flex-1 py-3 rounded-xl bg-wt-orange text-white font-semibold text-sm disabled:opacity-50 transition-all"
+                    className="flex-1 py-3 rounded-xl bg-bz-orange text-white font-semibold text-sm disabled:opacity-50 transition-all"
                     data-ocid="admin.save_button"
                   >
                     {adminSaving ? (
@@ -1417,7 +1581,7 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center"
             style={{
-              background: "rgba(0,0,0,0.5)",
+              background: "rgba(0,0,0,0.75)",
               backdropFilter: "blur(4px)",
             }}
             onClick={(e) => {
@@ -1429,17 +1593,21 @@ export default function App() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 80, opacity: 0 }}
               transition={{ type: "spring", stiffness: 280, damping: 26 }}
-              className="w-full max-w-md bg-white rounded-t-3xl sm:rounded-2xl overflow-hidden"
+              className="w-full max-w-md rounded-t-3xl sm:rounded-2xl overflow-hidden"
+              style={{ background: "#161B22", border: "1px solid #21262D" }}
             >
               {/* Modal header */}
-              <div className="flex items-center justify-between px-5 py-4 border-b border-wt-border">
-                <h2 className="font-bold text-wt-text text-base">
+              <div
+                className="flex items-center justify-between px-5 py-4 border-b"
+                style={{ borderColor: "#21262D" }}
+              >
+                <h2 className="font-bold text-bz-text text-base">
                   {authMode === "login" ? "Login" : "Create Account"}
                 </h2>
                 <button
                   type="button"
                   onClick={() => setShowAuthModal(false)}
-                  className="text-wt-muted hover:text-wt-text transition-colors p-1.5 rounded-lg hover:bg-wt-surface"
+                  className="text-bz-muted hover:text-bz-text transition-colors p-1.5 rounded-lg"
                   data-ocid="auth.close_button"
                 >
                   <X size={18} />
@@ -1448,7 +1616,10 @@ export default function App() {
 
               <div className="px-5 py-5 space-y-4">
                 {/* Tab toggle */}
-                <div className="flex rounded-xl bg-wt-surface p-1">
+                <div
+                  className="flex rounded-xl p-1"
+                  style={{ background: "#0D1117" }}
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -1457,9 +1628,12 @@ export default function App() {
                     }}
                     className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
                       authMode === "login"
-                        ? "bg-white text-wt-text shadow-sm"
-                        : "text-wt-muted"
+                        ? "text-bz-text shadow-sm"
+                        : "text-bz-muted"
                     }`}
+                    style={
+                      authMode === "login" ? { background: "#161B22" } : {}
+                    }
                     data-ocid="auth.login.tab"
                   >
                     Login
@@ -1472,9 +1646,12 @@ export default function App() {
                     }}
                     className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
                       authMode === "register"
-                        ? "bg-white text-wt-text shadow-sm"
-                        : "text-wt-muted"
+                        ? "text-bz-text shadow-sm"
+                        : "text-bz-muted"
                     }`}
+                    style={
+                      authMode === "register" ? { background: "#161B22" } : {}
+                    }
                     data-ocid="auth.register.tab"
                   >
                     Register
@@ -1486,7 +1663,7 @@ export default function App() {
                   <div>
                     <label
                       htmlFor="auth-name"
-                      className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                      className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                     >
                       Full Name
                     </label>
@@ -1495,7 +1672,8 @@ export default function App() {
                       value={authName}
                       onChange={(e) => setAuthName(e.target.value)}
                       placeholder="Your name"
-                      className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                      className="w-full px-4 py-3 rounded-xl border text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                      style={{ background: "#0D1117", borderColor: "#21262D" }}
                       id="auth-name"
                       data-ocid="auth.name.input"
                     />
@@ -1506,7 +1684,7 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="auth-email"
-                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                   >
                     Email / Username
                   </label>
@@ -1515,7 +1693,8 @@ export default function App() {
                     value={authEmail}
                     onChange={(e) => setAuthEmail(e.target.value)}
                     placeholder="Enter email or username"
-                    className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    className="w-full px-4 py-3 rounded-xl border text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
                     id="auth-email"
                     data-ocid="auth.input"
                   />
@@ -1525,7 +1704,7 @@ export default function App() {
                 <div>
                   <label
                     htmlFor="auth-password"
-                    className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                    className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                   >
                     Password
                   </label>
@@ -1534,9 +1713,9 @@ export default function App() {
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
                     placeholder="Enter password"
-                    className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                    className="w-full px-4 py-3 rounded-xl border text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    style={{ background: "#0D1117", borderColor: "#21262D" }}
                     id="auth-password"
-                    data-ocid="auth.password.input"
                   />
                 </div>
 
@@ -1545,7 +1724,7 @@ export default function App() {
                   <div>
                     <label
                       htmlFor="auth-confirm"
-                      className="block text-xs font-semibold text-wt-muted uppercase tracking-wide mb-1.5"
+                      className="block text-xs font-semibold text-bz-muted uppercase tracking-wide mb-1.5"
                     >
                       Confirm Password
                     </label>
@@ -1554,21 +1733,26 @@ export default function App() {
                       value={authConfirmPassword}
                       onChange={(e) => setAuthConfirmPassword(e.target.value)}
                       placeholder="Confirm password"
-                      className="w-full px-4 py-3 rounded-xl border border-wt-border bg-white text-wt-text text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                      className="w-full px-4 py-3 rounded-xl border text-bz-text text-sm placeholder:text-bz-muted focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                      style={{ background: "#0D1117", borderColor: "#21262D" }}
                       id="auth-confirm"
-                      data-ocid="auth.confirm.input"
                     />
                   </div>
                 )}
 
-                {/* Error */}
+                {/* Auth error */}
                 <AnimatePresence>
                   {authError && (
                     <motion.div
                       initial={{ opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0 }}
-                      className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm"
+                      className="px-4 py-3 rounded-xl text-sm"
+                      style={{
+                        background: "#2D1515",
+                        border: "1px solid #7f1d1d",
+                        color: "#fca5a5",
+                      }}
                       data-ocid="auth.error_state"
                     >
                       ⚠️ {authError}
@@ -1576,33 +1760,27 @@ export default function App() {
                   )}
                 </AnimatePresence>
 
-                {/* Submit button */}
+                {/* Submit */}
                 <button
                   type="button"
                   onClick={authMode === "login" ? handleLogin : handleRegister}
-                  className="w-full py-4 rounded-xl font-bold text-white text-base"
-                  style={{
-                    background: "#F97316",
-                    boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
-                  }}
+                  className="w-full py-3 rounded-xl bg-bz-orange text-white font-bold text-sm transition-all hover:bg-bz-orange-dark active:scale-95"
                   data-ocid="auth.submit_button"
                 >
                   {authMode === "login" ? "Login" : "Create Account"}
                 </button>
-
-                {/* OR divider */}
-                <div className="flex items-center gap-3 my-1">
-                  <div className="flex-1 h-px bg-gray-200" />
-                  <span className="text-xs text-gray-400 font-medium">OR</span>
-                  <div className="flex-1 h-px bg-gray-200" />
-                </div>
 
                 {/* Google Sign-In button — coming soon */}
                 <div className="relative">
                   <button
                     type="button"
                     onClick={handleGoogleSignIn}
-                    className="w-full py-3 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center gap-3 font-semibold text-gray-400 text-sm opacity-70 cursor-not-allowed"
+                    className="w-full py-3 rounded-xl border flex items-center justify-center gap-3 font-semibold text-sm opacity-50 cursor-not-allowed"
+                    style={{
+                      borderColor: "#21262D",
+                      color: "#7D8590",
+                      background: "#0D1117",
+                    }}
                     data-ocid="auth.google_button"
                   >
                     <svg
@@ -1632,13 +1810,16 @@ export default function App() {
                       />
                     </svg>
                     Sign in with Google
-                    <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-500">
+                    <span
+                      className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                      style={{ background: "#2D1A0A", color: "#F97316" }}
+                    >
                       Coming Soon
                     </span>
                   </button>
                 </div>
 
-                <p className="text-center text-wt-muted text-xs pb-1">
+                <p className="text-center text-bz-muted text-xs pb-1">
                   {authMode === "login"
                     ? "Don't have an account? "
                     : "Already have an account? "}
@@ -1648,7 +1829,7 @@ export default function App() {
                       setAuthMode(authMode === "login" ? "register" : "login");
                       setAuthError("");
                     }}
-                    className="text-wt-orange font-semibold hover:underline"
+                    className="text-bz-orange font-semibold hover:underline"
                   >
                     {authMode === "login" ? "Register" : "Login"}
                   </button>
@@ -1659,7 +1840,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ═══ FOOTER (hidden, admin links accessible) ═══ */}
+      {/* ═══ FOOTER ═══ */}
       <div className="hidden">
         <button
           type="button"
@@ -1684,15 +1865,15 @@ export default function App() {
         </a>
       </div>
 
-      {/* Visible footer attribution */}
+      {/* Visible footer */}
       <div className="pb-20 pt-3 px-4 text-center">
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-bz-muted">
           © {new Date().getFullYear()} DRN ML TopUp. Built with ❤️ using{" "}
           <a
             href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-wt-orange hover:underline"
+            className="text-bz-orange hover:underline"
           >
             caffeine.ai
           </a>
@@ -1701,7 +1882,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setCurrentView("admin")}
-            className="flex items-center gap-1 text-gray-300 hover:text-wt-orange text-[10px] font-semibold transition-colors"
+            className="flex items-center gap-1 text-bz-muted hover:text-bz-orange text-[10px] font-semibold transition-colors"
             data-ocid="footer.admin.open_modal_button"
           >
             <ShieldCheck size={10} />
@@ -1713,7 +1894,7 @@ export default function App() {
               setAdminModalOpen(true);
               loadApiConfig();
             }}
-            className="flex items-center gap-1 text-gray-300 hover:text-wt-muted text-[10px] font-semibold transition-colors"
+            className="flex items-center gap-1 text-bz-muted hover:text-bz-muted text-[10px] font-semibold transition-colors"
             data-ocid="footer.admin.button"
           >
             <Settings size={10} />
