@@ -22,8 +22,9 @@ interface AdminDashboardProps {
 const ADMIN_PASSWORD = "MAYALAXMI@6";
 const SESSION_KEY = "adminAuth";
 
-function formatTimestamp(ts: bigint): string {
-  const ms = Number(ts / BigInt(1_000_000));
+function formatTimestamp(ts: bigint | number): string {
+  const ms =
+    typeof ts === "bigint" ? Number(ts / BigInt(1_000_000)) : Number(ts);
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("en-US", {
@@ -36,6 +37,42 @@ function formatTimestamp(ts: bigint): string {
   });
 }
 
+// Unified order shape for display (covers both backend and localStorage orders)
+interface DisplayOrder {
+  id: string;
+  playerUID: string;
+  packageName: string;
+  priceNPR: bigint;
+  screenshotData: string;
+  status: string;
+  timestamp: bigint;
+  source: "backend" | "local";
+}
+
+/** Read orders saved to localStorage by the App's fallback path */
+function getLocalOrders(): DisplayOrder[] {
+  try {
+    const raw = localStorage.getItem("drn_orders");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((o: any) => ({
+      id: String(o.id ?? ""),
+      playerUID: String(o.playerUID ?? ""),
+      packageName: String(o.packageName ?? ""),
+      priceNPR: BigInt(Math.round(Number(o.priceNPR ?? 0))),
+      screenshotData: String(o.screenshotData ?? ""),
+      status: String(o.status ?? "Pending"),
+      // localStorage stores timestamp as ms epoch; convert to nanoseconds
+      timestamp:
+        BigInt(Math.round(Number(o.timestamp ?? 0))) * BigInt(1_000_000),
+      source: "local" as const,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
   const [isAuthed, setIsAuthed] = useState(
     () => sessionStorage.getItem(SESSION_KEY) === "true",
@@ -44,33 +81,66 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
   const [passwordError, setPasswordError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  const [orders, setOrders] = useState<ManualOrder[]>([]);
+  const [orders, setOrders] = useState<DisplayOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState("");
 
   const loadOrders = useCallback(async () => {
-    if (!actor) return;
     setLoading(true);
     setFetchError("");
-    try {
-      const result = await actor.getManualOrders();
-      // Sort newest first
-      const sorted = [...result].sort((a, b) =>
-        b.timestamp > a.timestamp ? 1 : -1,
-      );
-      setOrders(sorted);
-    } catch (e) {
-      console.error(e);
-      setFetchError("Failed to load orders. Please refresh.");
+
+    const allOrders: DisplayOrder[] = [];
+    const seenIds = new Set<string>();
+
+    // 1. Try backend
+    if (actor) {
+      try {
+        const backendOrders: ManualOrder[] = await actor.getManualOrders();
+        for (const o of backendOrders) {
+          allOrders.push({
+            id: o.id,
+            playerUID: o.playerUID,
+            packageName: o.packageName,
+            priceNPR: o.priceNPR,
+            screenshotData: o.screenshotData,
+            status: o.status,
+            timestamp: o.timestamp,
+            source: "backend",
+          });
+          seenIds.add(o.id);
+        }
+      } catch (e) {
+        console.error("Backend getManualOrders failed:", e);
+        // Don't set fetchError here — we still try localStorage below
+      }
     }
+
+    // 2. Always merge localStorage orders (covers fallback submissions)
+    const localOrders = getLocalOrders();
+    for (const lo of localOrders) {
+      if (!seenIds.has(lo.id)) {
+        allOrders.push(lo);
+        seenIds.add(lo.id);
+      }
+    }
+
+    if (allOrders.length === 0 && !actor) {
+      setFetchError(
+        "Backend not connected. Showing locally saved orders only. Refresh to retry.",
+      );
+    }
+
+    // Sort newest first
+    allOrders.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
+    setOrders(allOrders);
     setLoading(false);
   }, [actor]);
 
   useEffect(() => {
     if (isAuthed) {
-      loadOrders();
+      void loadOrders();
     }
   }, [isAuthed, loadOrders]);
 
@@ -92,15 +162,32 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
   };
 
   const handleMarkCompleted = useCallback(
-    async (orderId: string) => {
-      if (!actor) return;
+    async (orderId: string, isLocal: boolean) => {
       setCompletingId(orderId);
-      try {
-        await actor.markOrderCompleted(orderId);
-        await loadOrders();
-      } catch (e) {
-        console.error(e);
+
+      if (!isLocal && actor) {
+        try {
+          await actor.markOrderCompleted(orderId);
+        } catch (e) {
+          console.error(e);
+        }
       }
+
+      // Always update localStorage too (for local-only orders or sync)
+      try {
+        const raw = localStorage.getItem("drn_orders");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const updated = parsed.map((o: any) =>
+              o.id === orderId ? { ...o, status: "Completed" } : o,
+            );
+            localStorage.setItem("drn_orders", JSON.stringify(updated));
+          }
+        }
+      } catch {}
+
+      await loadOrders();
       setCompletingId(null);
     },
     [actor, loadOrders],
@@ -264,7 +351,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                 ADMIN DASHBOARD
               </div>
               <div className="font-rajdhani text-gamer-muted text-xs">
-                Free Fire Top-Up Orders
+                DRN ML TopUp — Order Management
               </div>
             </div>
           </div>
@@ -328,7 +415,13 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               className="rounded-2xl border p-5 flex flex-col items-center gap-2"
               style={{
                 background: "#0D1117",
-                borderColor: `rgba(${stat.color === "#22C55E" ? "34,197,94" : stat.color === "#FFA500" ? "255,165,0" : "255,176,0"},0.2)`,
+                borderColor: `rgba(${
+                  stat.color === "#22C55E"
+                    ? "34,197,94"
+                    : stat.color === "#FFA500"
+                      ? "255,165,0"
+                      : "255,176,0"
+                },0.2)`,
                 boxShadow: `0 0 20px ${stat.glow}20`,
               }}
             >
@@ -371,10 +464,10 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
             </div>
           </div>
 
-          {/* Error state */}
+          {/* Error / info banner */}
           {fetchError && (
             <div
-              className="mb-6 px-4 py-3 rounded-xl border border-red-500/40 bg-red-500/10 text-red-400 font-rajdhani text-sm flex items-center gap-2"
+              className="mb-6 px-4 py-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 text-yellow-400 font-rajdhani text-sm flex items-center gap-2"
               data-ocid="admin.error_state"
             >
               <span>⚠️</span> {fetchError}
@@ -454,6 +547,19 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                       >
                         {order.id.slice(0, 16)}
                       </span>
+                      {/* Source badge */}
+                      {order.source === "local" && (
+                        <span
+                          className="px-2 py-0.5 rounded text-[10px] font-orbitron font-bold tracking-wider"
+                          style={{
+                            background: "rgba(100,100,255,0.12)",
+                            color: "#a5b4fc",
+                            border: "1px solid rgba(100,100,255,0.25)",
+                          }}
+                        >
+                          LOCAL
+                        </span>
+                      )}
                       {/* Status badge */}
                       {order.status === "Completed" ? (
                         <span
@@ -495,7 +601,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                           Player UID
                         </p>
                         <p className="font-orbitron font-bold text-gamer-heading text-sm break-all">
-                          {order.playerUID}
+                          {order.playerUID || "—"}
                         </p>
                       </div>
                       {/* Package */}
@@ -504,7 +610,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                           Package
                         </p>
                         <p className="font-orbitron font-bold text-neon-gold text-sm">
-                          💎 {order.packageName}
+                          💎 {order.packageName || "—"}
                         </p>
                       </div>
                       {/* Price */}
@@ -519,7 +625,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                       {/* Screenshot */}
                       <div>
                         <p className="font-rajdhani text-gamer-muted text-xs tracking-widest uppercase mb-1">
-                          Screenshot
+                          eSewa Screenshot
                         </p>
                         {order.screenshotData ? (
                           <button
@@ -550,7 +656,12 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                     {order.status !== "Completed" && (
                       <button
                         type="button"
-                        onClick={() => handleMarkCompleted(order.id)}
+                        onClick={() =>
+                          handleMarkCompleted(
+                            order.id,
+                            order.source === "local",
+                          )
+                        }
                         disabled={completingId === order.id}
                         className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-orbitron font-bold text-xs tracking-widest transition-all duration-200 hover:scale-105 active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed disabled:hover:scale-100"
                         style={{
@@ -626,7 +737,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                 style={{ maxHeight: "80vh", objectFit: "contain" }}
               />
               <p className="text-center font-rajdhani text-gamer-muted text-sm mt-4">
-                Payment Screenshot
+                eSewa Payment Screenshot
               </p>
             </motion.div>
           </motion.div>
