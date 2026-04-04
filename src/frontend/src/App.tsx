@@ -111,6 +111,23 @@ export default function App() {
   const { actor } = useActor();
   const fullActor = actor as unknown as FullActorInterface | null;
 
+  // ─── Actor ref for async closures ───
+  const fullActorRef = useRef<FullActorInterface | null>(null);
+  useEffect(() => {
+    fullActorRef.current = fullActor;
+  }, [fullActor]);
+
+  // Wait up to 8 seconds for actor to be ready
+  const waitForActor =
+    useCallback(async (): Promise<FullActorInterface | null> => {
+      if (fullActorRef.current) return fullActorRef.current;
+      for (let i = 0; i < 16; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (fullActorRef.current) return fullActorRef.current;
+      }
+      return null;
+    }, []);
+
   // ─── Core state ───
   const [uid, setUid] = useState("");
   const [selectedPackage, setSelectedPackage] = useState<Package | null>(null);
@@ -245,24 +262,39 @@ export default function App() {
         timestamp: bigint;
       }> = [];
 
+      // Get IDs of orders submitted by this user
+      const userOrderKey = `drn_user_orders_${currentUser.email}`;
+      let myOrderIds: Set<string>;
+      try {
+        myOrderIds = new Set(
+          JSON.parse(localStorage.getItem(userOrderKey) || "[]"),
+        );
+      } catch {
+        myOrderIds = new Set();
+      }
+
       if (fullActor) {
         try {
-          orders = await fullActor.getManualOrders();
+          const allOrders = await fullActor.getManualOrders();
+          // Only show orders submitted by this user (tracked in localStorage)
+          orders = allOrders.filter((o) => myOrderIds.has(o.id));
         } catch {}
       }
 
-      // Merge localStorage orders
+      // Merge localStorage fallback orders for this user
       try {
         const local = JSON.parse(localStorage.getItem("drn_orders") || "[]");
-        const localOrders = local.map((o: any) => ({
-          id: o.id,
-          playerUID: o.playerUID,
-          packageName: o.packageName,
-          priceNPR: BigInt(o.priceNPR),
-          screenshotData: "",
-          status: o.status,
-          timestamp: BigInt(o.timestamp * 1_000_000),
-        }));
+        const localOrders = local
+          .filter((o: any) => myOrderIds.has(o.id))
+          .map((o: any) => ({
+            id: o.id,
+            playerUID: o.playerUID,
+            packageName: o.packageName,
+            priceNPR: BigInt(o.priceNPR),
+            screenshotData: "",
+            status: o.status,
+            timestamp: BigInt(o.timestamp * 1_000_000),
+          }));
         const backendIds = new Set(orders.map((o) => o.id));
         for (const lo of localOrders) {
           if (!backendIds.has(lo.id)) orders.push(lo);
@@ -334,20 +366,39 @@ export default function App() {
         ? selectedPackage.label!
         : `${selectedPackage.diamonds} Diamonds`;
 
-    // Try backend first, fall back to localStorage
-    try {
-      if (fullActor) {
-        orderId = await fullActor.submitManualOrder(
+    // Wait for actor to be ready, then submit to backend
+    const readyActor = await waitForActor();
+    let backendSuccess = false;
+    if (readyActor) {
+      try {
+        orderId = await readyActor.submitManualOrder(
           uid,
           pkgName,
           BigInt(Math.round(selectedPackage.price)),
           screenshotData,
         );
-      } else {
-        throw new Error("Actor not ready");
+        backendSuccess = true;
+      } catch (e) {
+        console.error("Backend submission failed:", e);
       }
-    } catch {
-      // Save to localStorage as fallback
+    }
+
+    if (backendSuccess) {
+      // Track this order ID under the current user so My Orders shows it
+      if (currentUser) {
+        const userOrderKey = `drn_user_orders_${currentUser.email}`;
+        try {
+          const myIds: string[] = JSON.parse(
+            localStorage.getItem(userOrderKey) || "[]",
+          );
+          if (!myIds.includes(orderId)) {
+            myIds.push(orderId);
+            localStorage.setItem(userOrderKey, JSON.stringify(myIds));
+          }
+        } catch {}
+      }
+    } else {
+      // Last-resort localStorage fallback — order will show LOCAL badge in admin
       try {
         const existing = JSON.parse(localStorage.getItem("drn_orders") || "[]");
         existing.push({
@@ -362,6 +413,19 @@ export default function App() {
         localStorage.setItem("drn_orders", JSON.stringify(existing));
       } catch {}
       orderId = localOrderId;
+      // Also track the local order ID for My Orders
+      if (currentUser) {
+        const userOrderKey = `drn_user_orders_${currentUser.email}`;
+        try {
+          const myIds: string[] = JSON.parse(
+            localStorage.getItem(userOrderKey) || "[]",
+          );
+          if (!myIds.includes(localOrderId)) {
+            myIds.push(localOrderId);
+            localStorage.setItem(userOrderKey, JSON.stringify(myIds));
+          }
+        } catch {}
+      }
     }
 
     if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
@@ -370,7 +434,7 @@ export default function App() {
     setShowPaymentScreen(false);
     setShowSuccess(true);
     setIsLoading(false);
-  }, [fullActor, uid, selectedPackage, paymentScreenshot]);
+  }, [waitForActor, uid, selectedPackage, paymentScreenshot, currentUser]);
 
   const handleCloseSuccess = useCallback(() => {
     setShowSuccess(false);

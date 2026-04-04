@@ -80,9 +80,9 @@ actor {
   let history = List.empty<TopUpRecord>();
   var orderCounter : Nat = 0;
 
-  // Manual orders — stable array (Buffer is non-stable)
+  // Manual orders — both stable so they survive upgrades
   stable var manualOrdersArray : [ManualOrder] = [];
-  var manualOrderCounter : Nat = 0;
+  stable var manualOrderCounter : Nat = 0;
 
   // ---- Admin: API Config ----
 
