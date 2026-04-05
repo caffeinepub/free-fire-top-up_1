@@ -16,6 +16,7 @@ import type {
 
 interface AdminDashboardProps {
   actor: FullActorInterface | null;
+  waitForActor: () => Promise<FullActorInterface | null>;
   onBack: () => void;
 }
 
@@ -26,7 +27,7 @@ function formatTimestamp(ts: bigint | number): string {
   const ms =
     typeof ts === "bigint" ? Number(ts / BigInt(1_000_000)) : Number(ts);
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "\u2014";
   return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -73,7 +74,11 @@ function getLocalOrders(): DisplayOrder[] {
   }
 }
 
-export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
+export default function AdminDashboard({
+  actor,
+  waitForActor,
+  onBack,
+}: AdminDashboardProps) {
   const [isAuthed, setIsAuthed] = useState(
     () => sessionStorage.getItem(SESSION_KEY) === "true",
   );
@@ -94,10 +99,14 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
     const allOrders: DisplayOrder[] = [];
     const seenIds = new Set<string>();
 
-    // 1. Try backend
-    if (actor) {
+    // Wait for actor to be ready (up to 8 seconds)
+    const resolvedActor = actor ?? (await waitForActor());
+
+    // 1. Fetch ALL orders from the backend — no user filter, global view
+    if (resolvedActor) {
       try {
-        const backendOrders: ManualOrder[] = await actor.getManualOrders();
+        const backendOrders: ManualOrder[] =
+          await resolvedActor.getManualOrders();
         for (const o of backendOrders) {
           allOrders.push({
             id: o.id,
@@ -113,8 +122,14 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
         }
       } catch (e) {
         console.error("Backend getManualOrders failed:", e);
-        // Don't set fetchError here — we still try localStorage below
+        setFetchError(
+          "Could not reach backend. Showing locally saved orders. Refresh to retry.",
+        );
       }
+    } else {
+      setFetchError(
+        "Backend not connected. Showing locally saved orders only. Refresh to retry.",
+      );
     }
 
     // 2. Always merge localStorage orders (covers fallback submissions)
@@ -126,18 +141,13 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
       }
     }
 
-    if (allOrders.length === 0 && !actor) {
-      setFetchError(
-        "Backend not connected. Showing locally saved orders only. Refresh to retry.",
-      );
-    }
-
     // Sort newest first
     allOrders.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
     setOrders(allOrders);
     setLoading(false);
-  }, [actor]);
+  }, [actor, waitForActor]);
 
+  // Load all orders when authenticated, and re-fetch whenever actor becomes ready
   useEffect(() => {
     if (isAuthed) {
       void loadOrders();
@@ -165,9 +175,15 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
     async (orderId: string, isLocal: boolean) => {
       setCompletingId(orderId);
 
-      if (!isLocal && actor) {
+      if (!isLocal) {
+        const resolvedActor = actor ?? (await waitForActor());
+        if (!resolvedActor) {
+          alert("Backend not connected. Please refresh and try again.");
+          setCompletingId(null);
+          return;
+        }
         try {
-          await actor.markOrderCompleted(orderId);
+          await resolvedActor.markOrderCompleted(orderId);
         } catch (e) {
           console.error(e);
         }
@@ -190,7 +206,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
       await loadOrders();
       setCompletingId(null);
     },
-    [actor, loadOrders],
+    [actor, waitForActor, loadOrders],
   );
 
   const pendingCount = orders.filter((o) => o.status !== "Completed").length;
@@ -283,7 +299,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                   className="text-red-400 font-rajdhani text-sm mb-4 flex items-center gap-2"
                   data-ocid="admin.error_state"
                 >
-                  <span>⚠️</span> {passwordError}
+                  <span>\u26a0\ufe0f</span> {passwordError}
                 </motion.p>
               )}
             </AnimatePresence>
@@ -304,7 +320,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               }}
               data-ocid="admin.submit_button"
             >
-              🔓 UNLOCK DASHBOARD
+              \uD83D\uDD13 UNLOCK DASHBOARD
             </button>
 
             <button
@@ -313,7 +329,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               className="w-full mt-3 py-3 rounded-xl border border-gamer-border text-gamer-muted font-orbitron font-bold text-xs tracking-widest hover:border-gamer-body hover:text-gamer-body transition-all duration-200"
               data-ocid="admin.cancel_button"
             >
-              ← BACK TO SITE
+              \u2190 BACK TO SITE
             </button>
           </div>
         </motion.div>
@@ -351,7 +367,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                 ADMIN DASHBOARD
               </div>
               <div className="font-rajdhani text-gamer-muted text-xs">
-                DRN ML TopUp — Order Management
+                DRN ML TopUp \u2014 All Orders (Global View)
               </div>
             </div>
           </div>
@@ -364,7 +380,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               data-ocid="admin.button"
             >
               <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-              REFRESH
+              REFRESH ALL
             </button>
             <button
               type="button"
@@ -393,21 +409,21 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               value: orders.length,
               color: "#FFB000",
               glow: "rgba(255,176,0,0.3)",
-              icon: "📋",
+              icon: "\uD83D\uDCCB",
             },
             {
               label: "Pending",
               value: pendingCount,
               color: "#FFA500",
               glow: "rgba(255,165,0,0.3)",
-              icon: "⏳",
+              icon: "\u23F3",
             },
             {
               label: "Completed",
               value: completedCount,
               color: "#22C55E",
               glow: "rgba(34,197,94,0.3)",
-              icon: "✅",
+              icon: "\u2705",
             },
           ].map((stat) => (
             <div
@@ -450,7 +466,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
         >
           <div className="flex items-center justify-between mb-6">
             <h2 className="font-orbitron font-black text-xl text-neon-gold text-glow-gold-sm tracking-widest">
-              SUBMITTED ORDERS
+              ALL USER ORDERS
             </h2>
             <div
               className="px-3 py-1 rounded-full text-xs font-orbitron font-bold tracking-wider"
@@ -470,18 +486,20 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
               className="mb-6 px-4 py-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 text-yellow-400 font-rajdhani text-sm flex items-center gap-2"
               data-ocid="admin.error_state"
             >
-              <span>⚠️</span> {fetchError}
+              <span>\u26a0\ufe0f</span> {fetchError}
             </div>
           )}
 
           {/* Loading */}
           {loading ? (
             <div
-              className="flex items-center justify-center py-24 gap-3 text-gamer-muted font-rajdhani"
+              className="flex flex-col items-center justify-center py-24 gap-4 text-gamer-muted font-rajdhani"
               data-ocid="admin.loading_state"
             >
-              <Loader2 className="animate-spin h-6 w-6 text-neon-gold" />
-              <span>Loading orders...</span>
+              <Loader2 className="animate-spin h-8 w-8 text-neon-gold" />
+              <span className="text-sm">
+                Fetching all orders from all users...
+              </span>
             </div>
           ) : orders.length === 0 ? (
             <motion.div
@@ -497,14 +515,14 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                   border: "2px dashed rgba(255,176,0,0.2)",
                 }}
               >
-                📭
+                \uD83D\uDCED
               </div>
               <div className="text-center">
                 <p className="font-orbitron font-bold text-gamer-muted text-sm tracking-widest">
                   NO ORDERS YET
                 </p>
                 <p className="font-rajdhani text-gamer-muted text-sm mt-1">
-                  Customer orders will appear here after submission
+                  Orders from all users will appear here after submission
                 </p>
               </div>
             </motion.div>
@@ -583,7 +601,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                           }}
                           data-ocid={`admin.loading_state.${idx + 1}`}
                         >
-                          ⏳ PENDING
+                          \u23F3 PENDING
                         </span>
                       )}
                     </div>
@@ -601,7 +619,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                           Player UID
                         </p>
                         <p className="font-orbitron font-bold text-gamer-heading text-sm break-all">
-                          {order.playerUID || "—"}
+                          {order.playerUID || "\u2014"}
                         </p>
                       </div>
                       {/* Package */}
@@ -610,7 +628,7 @@ export default function AdminDashboard({ actor, onBack }: AdminDashboardProps) {
                           Package
                         </p>
                         <p className="font-orbitron font-bold text-neon-gold text-sm">
-                          💎 {order.packageName || "—"}
+                          \uD83D\uDC8E {order.packageName || "\u2014"}
                         </p>
                       </div>
                       {/* Price */}

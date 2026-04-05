@@ -486,7 +486,11 @@ export default function App() {
 
   if (currentView === "admin") {
     return (
-      <AdminDashboard actor={fullActor} onBack={() => setCurrentView("main")} />
+      <AdminDashboard
+        actor={fullActor}
+        waitForActor={waitForActor}
+        onBack={() => setCurrentView("main")}
+      />
     );
   }
 
