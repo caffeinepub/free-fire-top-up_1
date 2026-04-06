@@ -154,6 +154,15 @@ export default function AdminDashboard({
     }
   }, [isAuthed, loadOrders]);
 
+  // Auto-refresh every 15 seconds when authenticated
+  useEffect(() => {
+    if (!isAuthed) return;
+    const interval = setInterval(() => {
+      void loadOrders();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [isAuthed, loadOrders]);
+
   const handleLogin = () => {
     if (passwordInput === ADMIN_PASSWORD) {
       sessionStorage.setItem(SESSION_KEY, "true");

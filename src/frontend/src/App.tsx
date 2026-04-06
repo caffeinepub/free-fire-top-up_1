@@ -81,12 +81,12 @@ const PROVIDER_DEFAULTS: Record<string, string> = {
 };
 
 async function compressImageToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const MAX_SIZE = 800;
+      const MAX_SIZE = 400;
       let { width, height } = img;
       if (width > MAX_SIZE || height > MAX_SIZE) {
         const ratio = Math.min(MAX_SIZE / width, MAX_SIZE / height);
@@ -98,9 +98,30 @@ async function compressImageToBase64(file: File): Promise<string> {
       canvas.height = height;
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", 0.6));
+
+      // Try progressively lower quality until under 700KB
+      const MAX_B64_BYTES = 700_000;
+      let quality = 0.3;
+      let result = canvas.toDataURL("image/jpeg", quality);
+
+      // If still too large, reduce quality further
+      for (
+        let attempt = 0;
+        attempt < 3 && result.length > MAX_B64_BYTES;
+        attempt++
+      ) {
+        quality = quality * 0.6;
+        result = canvas.toDataURL("image/jpeg", quality);
+      }
+
+      // If still too large after all attempts, return empty (order still saves without screenshot)
+      if (result.length > MAX_B64_BYTES) {
+        resolve("");
+      } else {
+        resolve(result);
+      }
     };
-    img.onerror = reject;
+    img.onerror = () => resolve(""); // Don't fail the order due to image error
     img.src = url;
   });
 }
@@ -380,6 +401,23 @@ export default function App() {
         backendSuccess = true;
       } catch (e) {
         console.error("Backend submission failed:", e);
+        // If screenshot caused the failure (size limit), try again without screenshot
+        if (screenshotData && String(e).includes("size")) {
+          try {
+            orderId = await readyActor.submitManualOrder(
+              uid,
+              pkgName,
+              BigInt(Math.round(selectedPackage.price)),
+              "",
+            );
+            backendSuccess = true;
+          } catch (e2) {
+            console.error(
+              "Backend submission failed even without screenshot:",
+              e2,
+            );
+          }
+        }
       }
     }
 
