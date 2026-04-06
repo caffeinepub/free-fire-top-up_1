@@ -3,6 +3,7 @@ import {
   Eye,
   Loader2,
   LogOut,
+  MessageCircle,
   RefreshCw,
   ShieldCheck,
   X,
@@ -27,7 +28,7 @@ function formatTimestamp(ts: bigint | number): string {
   const ms =
     typeof ts === "bigint" ? Number(ts / BigInt(1_000_000)) : Number(ts);
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "\u2014";
+  if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -123,12 +124,12 @@ export default function AdminDashboard({
       } catch (e) {
         console.error("Backend getManualOrders failed:", e);
         setFetchError(
-          "Could not reach backend. Showing locally saved orders. Refresh to retry.",
+          "Could not reach the server. Showing locally saved orders only. Tap REFRESH ALL to retry.",
         );
       }
     } else {
       setFetchError(
-        "Backend not connected. Showing locally saved orders only. Refresh to retry.",
+        "Server not connected yet. Showing locally saved orders. Tap REFRESH ALL once the app finishes loading.",
       );
     }
 
@@ -308,7 +309,7 @@ export default function AdminDashboard({
                   className="text-red-400 font-rajdhani text-sm mb-4 flex items-center gap-2"
                   data-ocid="admin.error_state"
                 >
-                  <span>\u26a0\ufe0f</span> {passwordError}
+                  <span>⚠️</span> {passwordError}
                 </motion.p>
               )}
             </AnimatePresence>
@@ -329,7 +330,7 @@ export default function AdminDashboard({
               }}
               data-ocid="admin.submit_button"
             >
-              \uD83D\uDD13 UNLOCK DASHBOARD
+              🔓 UNLOCK DASHBOARD
             </button>
 
             <button
@@ -338,7 +339,7 @@ export default function AdminDashboard({
               className="w-full mt-3 py-3 rounded-xl border border-gamer-border text-gamer-muted font-orbitron font-bold text-xs tracking-widest hover:border-gamer-body hover:text-gamer-body transition-all duration-200"
               data-ocid="admin.cancel_button"
             >
-              \u2190 BACK TO SITE
+              ← BACK TO SITE
             </button>
           </div>
         </motion.div>
@@ -376,11 +377,31 @@ export default function AdminDashboard({
                 ADMIN DASHBOARD
               </div>
               <div className="font-rajdhani text-gamer-muted text-xs">
-                DRN ML TopUp \u2014 All Orders (Global View)
+                DRN ML TopUp — All Orders (Global View)
               </div>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {/* WhatsApp Help & Support */}
+            <a
+              href="https://wa.me/9779743964075"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border font-orbitron font-bold text-xs tracking-widest transition-all border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20 hover:border-green-500/60 hover:text-green-300"
+              data-ocid="admin.whatsapp_button"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                width="14"
+                height="14"
+                aria-hidden="true"
+              >
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+              </svg>
+              HELP &amp; SUPPORT
+            </a>
+            {/* Refresh All */}
             <button
               type="button"
               onClick={loadOrders}
@@ -418,21 +439,21 @@ export default function AdminDashboard({
               value: orders.length,
               color: "#FFB000",
               glow: "rgba(255,176,0,0.3)",
-              icon: "\uD83D\uDCCB",
+              icon: "📋",
             },
             {
               label: "Pending",
               value: pendingCount,
               color: "#FFA500",
               glow: "rgba(255,165,0,0.3)",
-              icon: "\u23F3",
+              icon: "⏳",
             },
             {
               label: "Completed",
               value: completedCount,
               color: "#22C55E",
               glow: "rgba(34,197,94,0.3)",
-              icon: "\u2705",
+              icon: "✅",
             },
           ].map((stat) => (
             <div
@@ -492,10 +513,20 @@ export default function AdminDashboard({
           {/* Error / info banner */}
           {fetchError && (
             <div
-              className="mb-6 px-4 py-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 text-yellow-400 font-rajdhani text-sm flex items-center gap-2"
+              className="mb-6 px-4 py-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 text-yellow-400 font-rajdhani text-sm flex items-center justify-between gap-2"
               data-ocid="admin.error_state"
             >
-              <span>\u26a0\ufe0f</span> {fetchError}
+              <span className="flex items-center gap-2">
+                <span>⚠️</span> {fetchError}
+              </span>
+              <button
+                type="button"
+                onClick={() => setFetchError("")}
+                className="text-yellow-400 hover:text-yellow-200 text-xs font-bold shrink-0"
+                aria-label="Dismiss"
+              >
+                ✕
+              </button>
             </div>
           )}
 
@@ -524,7 +555,7 @@ export default function AdminDashboard({
                   border: "2px dashed rgba(255,176,0,0.2)",
                 }}
               >
-                \uD83D\uDCED
+                📭
               </div>
               <div className="text-center">
                 <p className="font-orbitron font-bold text-gamer-muted text-sm tracking-widest">
@@ -610,7 +641,7 @@ export default function AdminDashboard({
                           }}
                           data-ocid={`admin.loading_state.${idx + 1}`}
                         >
-                          \u23F3 PENDING
+                          ⏳ PENDING
                         </span>
                       )}
                     </div>
@@ -628,7 +659,7 @@ export default function AdminDashboard({
                           Player UID
                         </p>
                         <p className="font-orbitron font-bold text-gamer-heading text-sm break-all">
-                          {order.playerUID || "\u2014"}
+                          {order.playerUID || "—"}
                         </p>
                       </div>
                       {/* Package */}
@@ -637,7 +668,7 @@ export default function AdminDashboard({
                           Package
                         </p>
                         <p className="font-orbitron font-bold text-neon-gold text-sm">
-                          \uD83D\uDC8E {order.packageName || "\u2014"}
+                          💎 {order.packageName || "—"}
                         </p>
                       </div>
                       {/* Price */}

@@ -363,6 +363,12 @@ export default function App() {
 
   const handleManualSubmit = useCallback(async () => {
     if (!selectedPackage || !uid) return;
+    if (!paymentScreenshot) {
+      setError(
+        "Please upload your eSewa payment screenshot before submitting.",
+      );
+      return;
+    }
     setIsLoading(true);
     setError("");
     setLoadingStatus(LOADING_STATUSES[0]);
@@ -1382,12 +1388,20 @@ export default function App() {
                   whileHover={{ scale: 1.01 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={handleManualSubmit}
-                  disabled={isLoading}
+                  disabled={isLoading || !paymentScreenshot}
                   className="w-full py-4 rounded-xl font-bold text-white text-base transition-all disabled:opacity-70"
-                  style={{
-                    background: "#F97316",
-                    boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
-                  }}
+                  style={
+                    paymentScreenshot
+                      ? {
+                          background: "#F97316",
+                          boxShadow: "0 4px 16px rgba(249,115,22,0.35)",
+                        }
+                      : {
+                          background: "#1C2128",
+                          color: "#4B5563",
+                          cursor: "not-allowed",
+                        }
+                  }
                   data-ocid="payment.submit_button"
                 >
                   {isLoading ? (
@@ -1401,8 +1415,14 @@ export default function App() {
                 </motion.button>
 
                 <p className="text-center text-bz-muted text-xs leading-relaxed pb-2">
-                  After paying via eSewa, upload your screenshot and tap Submit.
-                  Your diamonds will be sent after payment verification.
+                  {!paymentScreenshot ? (
+                    <span className="text-orange-400 font-semibold">
+                      ⚠️ Screenshot is required. Please upload your eSewa payment
+                      proof above.
+                    </span>
+                  ) : (
+                    "After paying via eSewa, tap Submit. Your diamonds will be sent after payment verification."
+                  )}
                 </p>
               </div>
             </motion.div>
