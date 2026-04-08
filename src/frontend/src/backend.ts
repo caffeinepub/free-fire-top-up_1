@@ -89,6 +89,44 @@ export class ExternalBlob {
         return this;
     }
 }
+export interface TopUpResult {
+    message: string;
+    timestamp: bigint;
+    success: boolean;
+    transactionId: string;
+}
+export interface TopUpRecord {
+    id: string;
+    uid: string;
+    packageName: string;
+    paymentMethod: string;
+    message: string;
+    timestamp: bigint;
+    success: boolean;
+    amount: bigint;
+    packageId: string;
+    transactionId: string;
+}
+export interface ManualOrder {
+    id: string;
+    playerUID: string;
+    packageName: string;
+    status: string;
+    timestamp: bigint;
+    priceNPR: bigint;
+    screenshotData: string;
+}
+export interface ApiConfig {
+    provider: string;
+    isConfigured: boolean;
+}
+export interface TopUpRequest {
+    uid: string;
+    packageName: string;
+    paymentMethod: string;
+    amount: bigint;
+    packageId: string;
+}
 export interface TopUpOrderInput {
     playerUID: string;
     paymentMethod: string;
@@ -105,6 +143,13 @@ export interface TopUpOrder {
 export interface backendInterface {
     createTopUpOrder(orderInput: TopUpOrderInput): Promise<void>;
     getAllOrders(): Promise<Array<TopUpOrder>>;
+    getApiConfig(): Promise<ApiConfig>;
+    getManualOrders(): Promise<Array<ManualOrder>>;
+    getTopUpHistory(): Promise<Array<TopUpRecord>>;
+    markOrderCompleted(orderId: string): Promise<boolean>;
+    processTopUp(request: TopUpRequest): Promise<TopUpResult>;
+    setApiConfig(key: string, baseUrl: string, provider: string): Promise<void>;
+    submitManualOrder(playerUID: string, packageName: string, priceNPR: bigint, screenshotData: string): Promise<string>;
 }
 export class Backend implements backendInterface {
     constructor(private actor: ActorSubclass<_SERVICE>, private _uploadFile: (file: ExternalBlob) => Promise<Uint8Array>, private _downloadFile: (file: Uint8Array) => Promise<ExternalBlob>, private processError?: (error: unknown) => never){}
@@ -133,6 +178,104 @@ export class Backend implements backendInterface {
             }
         } else {
             const result = await this.actor.getAllOrders();
+            return result;
+        }
+    }
+    async getApiConfig(): Promise<ApiConfig> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getApiConfig();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getApiConfig();
+            return result;
+        }
+    }
+    async getManualOrders(): Promise<Array<ManualOrder>> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getManualOrders();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getManualOrders();
+            return result;
+        }
+    }
+    async getTopUpHistory(): Promise<Array<TopUpRecord>> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.getTopUpHistory();
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.getTopUpHistory();
+            return result;
+        }
+    }
+    async markOrderCompleted(arg0: string): Promise<boolean> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.markOrderCompleted(arg0);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.markOrderCompleted(arg0);
+            return result;
+        }
+    }
+    async processTopUp(arg0: TopUpRequest): Promise<TopUpResult> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.processTopUp(arg0);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.processTopUp(arg0);
+            return result;
+        }
+    }
+    async setApiConfig(arg0: string, arg1: string, arg2: string): Promise<void> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.setApiConfig(arg0, arg1, arg2);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.setApiConfig(arg0, arg1, arg2);
+            return result;
+        }
+    }
+    async submitManualOrder(arg0: string, arg1: string, arg2: bigint, arg3: string): Promise<string> {
+        if (this.processError) {
+            try {
+                const result = await this.actor.submitManualOrder(arg0, arg1, arg2, arg3);
+                return result;
+            } catch (e) {
+                this.processError(e);
+                throw new Error("unreachable");
+            }
+        } else {
+            const result = await this.actor.submitManualOrder(arg0, arg1, arg2, arg3);
             return result;
         }
     }

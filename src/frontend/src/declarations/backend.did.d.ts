@@ -10,6 +10,16 @@ import type { ActorMethod } from '@icp-sdk/core/agent';
 import type { IDL } from '@icp-sdk/core/candid';
 import type { Principal } from '@icp-sdk/core/principal';
 
+export interface ApiConfig { 'provider' : string, 'isConfigured' : boolean }
+export interface ManualOrder {
+  'id' : string,
+  'playerUID' : string,
+  'packageName' : string,
+  'status' : string,
+  'timestamp' : bigint,
+  'priceNPR' : bigint,
+  'screenshotData' : string,
+}
 export interface TopUpOrder {
   'playerUID' : string,
   'paymentMethod' : string,
@@ -23,9 +33,41 @@ export interface TopUpOrderInput {
   'diamondAmount' : bigint,
   'priceNPR' : bigint,
 }
+export interface TopUpRecord {
+  'id' : string,
+  'uid' : string,
+  'packageName' : string,
+  'paymentMethod' : string,
+  'message' : string,
+  'timestamp' : bigint,
+  'success' : boolean,
+  'amount' : bigint,
+  'packageId' : string,
+  'transactionId' : string,
+}
+export interface TopUpRequest {
+  'uid' : string,
+  'packageName' : string,
+  'paymentMethod' : string,
+  'amount' : bigint,
+  'packageId' : string,
+}
+export interface TopUpResult {
+  'message' : string,
+  'timestamp' : bigint,
+  'success' : boolean,
+  'transactionId' : string,
+}
 export interface _SERVICE {
   'createTopUpOrder' : ActorMethod<[TopUpOrderInput], undefined>,
   'getAllOrders' : ActorMethod<[], Array<TopUpOrder>>,
+  'getApiConfig' : ActorMethod<[], ApiConfig>,
+  'getManualOrders' : ActorMethod<[], Array<ManualOrder>>,
+  'getTopUpHistory' : ActorMethod<[], Array<TopUpRecord>>,
+  'markOrderCompleted' : ActorMethod<[string], boolean>,
+  'processTopUp' : ActorMethod<[TopUpRequest], TopUpResult>,
+  'setApiConfig' : ActorMethod<[string, string, string], undefined>,
+  'submitManualOrder' : ActorMethod<[string, string, bigint, string], string>,
 }
 export declare const idlService: IDL.ServiceClass;
 export declare const idlInitArgs: IDL.Type[];

@@ -1,0 +1,76 @@
+// Version: 1.0.0
+type HttpHeader__837997805 = {name : Text; value : Text};
+type HttpRequestArgs__893152371 =
+  {
+    body : ?Blob;
+    headers : [HttpHeader__837997805];
+    is_replicated : ?Bool;
+    max_response_bytes : ?Nat64;
+    method : {#get; #head; #post};
+    url : Text
+  };
+type HttpResponse__280953736 =
+  {body : Blob; headers : [HttpHeader__837997805]; status : Nat};
+type ManualOrder__539117538 =
+  {
+    id : Text;
+    packageName : Text;
+    playerUID : Text;
+    priceNPR : Nat;
+    screenshotData : Text;
+    status : Text;
+    timestamp : Int
+  };
+type Nat__490723111 = Nat__920180692;
+type Nat__920180692 = Nat;
+type TopUpOrder__227403106 =
+  {
+    diamondAmount : Nat;
+    paymentMethod : Text;
+    playerUID : Text;
+    priceNPR : Nat;
+    timestamp : Int
+  };
+type TopUpRecord__667913778 =
+  {
+    amount : Nat;
+    id : Text;
+    message : Text;
+    packageId : Text;
+    packageName : Text;
+    paymentMethod : Text;
+    success : Bool;
+    timestamp : Int;
+    transactionId : Text;
+    uid : Text
+  };
+actor {
+  stable IC :
+    actor {
+      http_request :
+        shared HttpRequestArgs__893152371 -> async HttpResponse__280953736
+    };
+  stable var apiBaseUrl : Text;
+  stable var apiKey : Text;
+  stable var apiProvider : Text;
+  stable history :
+    {
+      var blockIndex : Nat__490723111;
+      var blocks : [var [var ?TopUpRecord__667913778]];
+      var elementIndex : Nat__490723111
+    };
+  stable var manualOrderCounter : Nat;
+  stable manualOrders :
+    {
+      var blockIndex : Nat__490723111;
+      var blocks : [var [var ?ManualOrder__539117538]];
+      var elementIndex : Nat__490723111
+    };
+  stable var orderCounter : Nat;
+  stable orders :
+    {
+      var blockIndex : Nat__490723111;
+      var blocks : [var [var ?TopUpOrder__227403106]];
+      var elementIndex : Nat__490723111
+    }
+};

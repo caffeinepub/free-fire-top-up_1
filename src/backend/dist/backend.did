@@ -1,0 +1,70 @@
+type TopUpResult = 
+ record {
+   message: text;
+   success: bool;
+   timestamp: int;
+   transactionId: text;
+ };
+type TopUpRequest = 
+ record {
+   amount: nat;
+   packageId: text;
+   packageName: text;
+   paymentMethod: text;
+   uid: text;
+ };
+type TopUpRecord = 
+ record {
+   amount: nat;
+   id: text;
+   message: text;
+   packageId: text;
+   packageName: text;
+   paymentMethod: text;
+   success: bool;
+   timestamp: int;
+   transactionId: text;
+   uid: text;
+ };
+type TopUpOrderInput = 
+ record {
+   diamondAmount: nat;
+   paymentMethod: text;
+   playerUID: text;
+   priceNPR: nat;
+ };
+type TopUpOrder = 
+ record {
+   diamondAmount: nat;
+   paymentMethod: text;
+   playerUID: text;
+   priceNPR: nat;
+   timestamp: int;
+ };
+type ManualOrder = 
+ record {
+   id: text;
+   packageName: text;
+   playerUID: text;
+   priceNPR: nat;
+   screenshotData: text;
+   status: text;
+   timestamp: int;
+ };
+type ApiConfig = 
+ record {
+   isConfigured: bool;
+   provider: text;
+ };
+service : {
+  createTopUpOrder: (orderInput: TopUpOrderInput) -> ();
+  getAllOrders: () -> (vec TopUpOrder) query;
+  getApiConfig: () -> (ApiConfig) query;
+  getManualOrders: () -> (vec ManualOrder) query;
+  getTopUpHistory: () -> (vec TopUpRecord) query;
+  markOrderCompleted: (orderId: text) -> (bool);
+  processTopUp: (request: TopUpRequest) -> (TopUpResult);
+  setApiConfig: (key: text, baseUrl: text, provider: text) -> ();
+  submitManualOrder: (playerUID: text, packageName: text, priceNPR: nat,
+   screenshotData: text) -> (text);
+}

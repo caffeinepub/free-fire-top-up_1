@@ -1,6 +1,7 @@
 import List "mo:core/List";
 import Time "mo:core/Time";
-import Array "mo:base/Array";
+
+
 
 actor {
 
@@ -80,9 +81,9 @@ actor {
   let history = List.empty<TopUpRecord>();
   var orderCounter : Nat = 0;
 
-  // Manual orders — both stable so they survive upgrades
-  stable var manualOrdersArray : [ManualOrder] = [];
-  stable var manualOrderCounter : Nat = 0;
+  // Manual orders — global stable list, survives upgrades via enhanced orthogonal persistence
+  let manualOrders = List.empty<ManualOrder>();
+  var manualOrderCounter : Nat = 0;
 
   // ---- Admin: API Config ----
 
@@ -185,13 +186,13 @@ actor {
 
   // ---- History ----
 
-  // Returns all top-up history (no Nat subtraction needed)
   public query func getTopUpHistory() : async [TopUpRecord] {
     history.toArray();
   };
 
   // ---- Manual Orders ----
 
+  // Submit a new manual order — stored globally, visible to all admin queries
   public shared func submitManualOrder(
     playerUID : Text,
     packageName : Text,
@@ -209,30 +210,23 @@ actor {
       status = "Pending";
       timestamp = Time.now();
     };
-    manualOrdersArray := Array.append<ManualOrder>(manualOrdersArray, [order]);
+    manualOrders.add(order);
     id
   };
 
+  // Returns ALL orders from ALL users — no caller filtering
   public query func getManualOrders() : async [ManualOrder] {
-    manualOrdersArray
+    manualOrders.toArray()
   };
 
+  // Mark a specific order as Completed — only changes status field
   public shared func markOrderCompleted(orderId : Text) : async Bool {
     var found = false;
-    manualOrdersArray := Array.map<ManualOrder, ManualOrder>(
-      manualOrdersArray,
+    manualOrders.mapInPlace(
       func(o : ManualOrder) : ManualOrder {
         if (o.id == orderId) {
           found := true;
-          {
-            id = o.id;
-            playerUID = o.playerUID;
-            packageName = o.packageName;
-            priceNPR = o.priceNPR;
-            screenshotData = o.screenshotData;
-            status = "Completed";
-            timestamp = o.timestamp;
-          }
+          { o with status = "Completed" }
         } else {
           o
         }

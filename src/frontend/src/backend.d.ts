@@ -7,50 +7,44 @@ export interface None {
     __kind__: "None";
 }
 export type Option<T> = Some<T> | None;
-
-export interface TopUpRequest {
-    uid: string;
-    packageId: string;
-    packageName: string;
-    amount: bigint;
-    paymentMethod: string;
-}
-
 export interface TopUpResult {
-    success: boolean;
-    transactionId: string;
     message: string;
     timestamp: bigint;
+    success: boolean;
+    transactionId: string;
 }
-
 export interface TopUpRecord {
     id: string;
     uid: string;
-    packageId: string;
     packageName: string;
-    amount: bigint;
     paymentMethod: string;
-    success: boolean;
-    transactionId: string;
     message: string;
     timestamp: bigint;
+    success: boolean;
+    amount: bigint;
+    packageId: string;
+    transactionId: string;
 }
-
-export interface ApiConfig {
-    isConfigured: boolean;
-    provider: string;
-}
-
 export interface ManualOrder {
     id: string;
     playerUID: string;
     packageName: string;
-    priceNPR: bigint;
-    screenshotData: string;
     status: string;
     timestamp: bigint;
+    priceNPR: bigint;
+    screenshotData: string;
 }
-
+export interface ApiConfig {
+    provider: string;
+    isConfigured: boolean;
+}
+export interface TopUpRequest {
+    uid: string;
+    packageName: string;
+    paymentMethod: string;
+    amount: bigint;
+    packageId: string;
+}
 export interface TopUpOrderInput {
     playerUID: string;
     paymentMethod: string;
@@ -65,13 +59,13 @@ export interface TopUpOrder {
     priceNPR: bigint;
 }
 export interface backendInterface {
-    processTopUp(request: TopUpRequest): Promise<TopUpResult>;
-    getTopUpHistory(): Promise<Array<TopUpRecord>>;
-    getApiConfig(): Promise<ApiConfig>;
-    setApiConfig(apiKey: string, baseUrl: string, provider: string): Promise<void>;
-    submitManualOrder(playerUID: string, packageName: string, priceNPR: bigint, screenshotData: string): Promise<string>;
-    getManualOrders(): Promise<Array<ManualOrder>>;
-    markOrderCompleted(orderId: string): Promise<boolean>;
     createTopUpOrder(orderInput: TopUpOrderInput): Promise<void>;
     getAllOrders(): Promise<Array<TopUpOrder>>;
+    getApiConfig(): Promise<ApiConfig>;
+    getManualOrders(): Promise<Array<ManualOrder>>;
+    getTopUpHistory(): Promise<Array<TopUpRecord>>;
+    markOrderCompleted(orderId: string): Promise<boolean>;
+    processTopUp(request: TopUpRequest): Promise<TopUpResult>;
+    setApiConfig(key: string, baseUrl: string, provider: string): Promise<void>;
+    submitManualOrder(playerUID: string, packageName: string, priceNPR: bigint, screenshotData: string): Promise<string>;
 }

@@ -3,13 +3,14 @@ import {
   Eye,
   Loader2,
   LogOut,
-  MessageCircle,
   RefreshCw,
   ShieldCheck,
+  Wifi,
+  WifiOff,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   backendInterface as FullActorInterface,
   ManualOrder,
@@ -39,7 +40,6 @@ function formatTimestamp(ts: bigint | number): string {
   });
 }
 
-// Unified order shape for display (covers both backend and localStorage orders)
 interface DisplayOrder {
   id: string;
   playerUID: string;
@@ -51,13 +51,13 @@ interface DisplayOrder {
   source: "backend" | "local";
 }
 
-/** Read orders saved to localStorage by the App's fallback path */
 function getLocalOrders(): DisplayOrder[] {
   try {
     const raw = localStorage.getItem("drn_orders");
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return parsed.map((o: any) => ({
       id: String(o.id ?? ""),
       playerUID: String(o.playerUID ?? ""),
@@ -65,7 +65,6 @@ function getLocalOrders(): DisplayOrder[] {
       priceNPR: BigInt(Math.round(Number(o.priceNPR ?? 0))),
       screenshotData: String(o.screenshotData ?? ""),
       status: String(o.status ?? "Pending"),
-      // localStorage stores timestamp as ms epoch; convert to nanoseconds
       timestamp:
         BigInt(Math.round(Number(o.timestamp ?? 0))) * BigInt(1_000_000),
       source: "local" as const,
@@ -92,18 +91,56 @@ export default function AdminDashboard({
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState("");
+  const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(true);
 
-  const loadOrders = useCallback(async () => {
-    setLoading(true);
+  // Keep a stable ref to waitForActor so we can call it in effects without
+  // re-creating every time actor changes
+  const waitForActorRef = useRef(waitForActor);
+  useEffect(() => {
+    waitForActorRef.current = waitForActor;
+  }, [waitForActor]);
+
+  const actorRef = useRef<FullActorInterface | null>(actor);
+  useEffect(() => {
+    actorRef.current = actor;
+    if (actor) {
+      setIsConnected(true);
+      setIsConnecting(false);
+    }
+  }, [actor]);
+
+  /**
+   * Core order-fetching function.
+   * Strategy:
+   *  1. If actor is available immediately, use it.
+   *  2. If not, poll via waitForActor (up to 30 seconds).
+   *  3. Fetch ALL orders via getManualOrders() — no user filter.
+   *  4. Always merge localStorage fallback orders.
+   */
+  const loadOrders = useCallback(async (showLoader = true) => {
+    if (showLoader) setLoading(true);
     setFetchError("");
 
     const allOrders: DisplayOrder[] = [];
     const seenIds = new Set<string>();
 
-    // Wait for actor to be ready (up to 8 seconds)
-    const resolvedActor = actor ?? (await waitForActor());
+    // Resolve actor — use ref first (instant), then wait up to 30s
+    let resolvedActor = actorRef.current;
+    if (!resolvedActor) {
+      setIsConnecting(true);
+      resolvedActor = await waitForActorRef.current();
+      if (resolvedActor) {
+        actorRef.current = resolvedActor;
+        setIsConnected(true);
+        setIsConnecting(false);
+      } else {
+        setIsConnecting(false);
+        setIsConnected(false);
+      }
+    }
 
-    // 1. Fetch ALL orders from the backend — no user filter, global view
+    // Fetch from backend (ALL orders, global)
     if (resolvedActor) {
       try {
         const backendOrders: ManualOrder[] =
@@ -121,19 +158,21 @@ export default function AdminDashboard({
           });
           seenIds.add(o.id);
         }
+        setIsConnected(true);
       } catch (e) {
-        console.error("Backend getManualOrders failed:", e);
+        console.error("getManualOrders failed:", e);
+        setIsConnected(false);
         setFetchError(
           "Could not reach the server. Showing locally saved orders only. Tap REFRESH ALL to retry.",
         );
       }
     } else {
       setFetchError(
-        "Server not connected yet. Showing locally saved orders. Tap REFRESH ALL once the app finishes loading.",
+        "Server not connected after 30s. Showing locally saved orders. Tap REFRESH ALL to retry.",
       );
     }
 
-    // 2. Always merge localStorage orders (covers fallback submissions)
+    // Always merge localStorage orders (covers any fallback submissions)
     const localOrders = getLocalOrders();
     for (const lo of localOrders) {
       if (!seenIds.has(lo.id)) {
@@ -145,22 +184,30 @@ export default function AdminDashboard({
     // Sort newest first
     allOrders.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
     setOrders(allOrders);
-    setLoading(false);
-  }, [actor, waitForActor]);
+    if (showLoader) setLoading(false);
+  }, []); // stable — uses refs internally
 
-  // Load all orders when authenticated, and re-fetch whenever actor becomes ready
+  // Load when authenticated
   useEffect(() => {
     if (isAuthed) {
-      void loadOrders();
+      void loadOrders(true);
     }
   }, [isAuthed, loadOrders]);
 
-  // Auto-refresh every 15 seconds when authenticated
+  // Re-fetch when actor prop transitions from null → available
+  useEffect(() => {
+    if (actor && isAuthed) {
+      // Actor just became available — silently refresh to pick up backend orders
+      void loadOrders(false);
+    }
+  }, [actor, isAuthed, loadOrders]);
+
+  // Auto-refresh every 15 seconds
   useEffect(() => {
     if (!isAuthed) return;
     const interval = setInterval(() => {
-      void loadOrders();
-    }, 15000);
+      void loadOrders(false);
+    }, 15_000);
     return () => clearInterval(interval);
   }, [isAuthed, loadOrders]);
 
@@ -186,7 +233,8 @@ export default function AdminDashboard({
       setCompletingId(orderId);
 
       if (!isLocal) {
-        const resolvedActor = actor ?? (await waitForActor());
+        let resolvedActor = actorRef.current;
+        if (!resolvedActor) resolvedActor = await waitForActorRef.current();
         if (!resolvedActor) {
           alert("Backend not connected. Please refresh and try again.");
           setCompletingId(null);
@@ -195,16 +243,17 @@ export default function AdminDashboard({
         try {
           await resolvedActor.markOrderCompleted(orderId);
         } catch (e) {
-          console.error(e);
+          console.error("markOrderCompleted failed:", e);
         }
       }
 
-      // Always update localStorage too (for local-only orders or sync)
+      // Update localStorage too (for local-only orders or sync)
       try {
         const raw = localStorage.getItem("drn_orders");
         if (raw) {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const updated = parsed.map((o: any) =>
               o.id === orderId ? { ...o, status: "Completed" } : o,
             );
@@ -213,10 +262,10 @@ export default function AdminDashboard({
         }
       } catch {}
 
-      await loadOrders();
+      await loadOrders(false);
       setCompletingId(null);
     },
-    [actor, waitForActor, loadOrders],
+    [loadOrders],
   );
 
   const pendingCount = orders.filter((o) => o.status !== "Completed").length;
@@ -239,7 +288,6 @@ export default function AdminDashboard({
           transition={{ type: "spring", stiffness: 280, damping: 24 }}
           className="w-full max-w-sm"
         >
-          {/* Icon */}
           <div className="flex justify-center mb-8">
             <div
               className="w-20 h-20 rounded-2xl flex items-center justify-center"
@@ -361,10 +409,10 @@ export default function AdminDashboard({
           backdropFilter: "blur(16px)",
         }}
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
-          <div className="flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16 gap-2">
+          <div className="flex items-center gap-3 min-w-0">
             <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center"
+              className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
               style={{
                 background: "rgba(255,176,0,0.12)",
                 border: "1px solid rgba(255,176,0,0.3)",
@@ -372,54 +420,99 @@ export default function AdminDashboard({
             >
               <ShieldCheck size={16} className="text-neon-gold" />
             </div>
-            <div>
-              <div className="font-orbitron font-black text-sm tracking-widest text-neon-gold">
+            <div className="min-w-0">
+              <div className="font-orbitron font-black text-sm tracking-widest text-neon-gold truncate">
                 ADMIN DASHBOARD
               </div>
-              <div className="font-rajdhani text-gamer-muted text-xs">
-                DRN ML TopUp — All Orders (Global View)
+              <div className="font-rajdhani text-gamer-muted text-xs truncate">
+                DRN ML TopUp — Global View
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+
+          {/* Connection status indicator */}
+          <div
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-orbitron font-bold tracking-wider shrink-0"
+            style={
+              isConnecting
+                ? {
+                    background: "rgba(234,179,8,0.1)",
+                    border: "1px solid rgba(234,179,8,0.3)",
+                    color: "#EAB308",
+                  }
+                : isConnected
+                  ? {
+                      background: "rgba(34,197,94,0.1)",
+                      border: "1px solid rgba(34,197,94,0.3)",
+                      color: "#22C55E",
+                    }
+                  : {
+                      background: "rgba(239,68,68,0.1)",
+                      border: "1px solid rgba(239,68,68,0.3)",
+                      color: "#EF4444",
+                    }
+            }
+            data-ocid="admin.connection_status"
+          >
+            {isConnecting ? (
+              <>
+                <Loader2 size={10} className="animate-spin" />
+                CONNECTING...
+              </>
+            ) : isConnected ? (
+              <>
+                <Wifi size={10} />
+                CONNECTED
+              </>
+            ) : (
+              <>
+                <WifiOff size={10} />
+                OFFLINE
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
             {/* WhatsApp Help & Support */}
             <a
               href="https://wa.me/9779743964075"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border font-orbitron font-bold text-xs tracking-widest transition-all border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20 hover:border-green-500/60 hover:text-green-300"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border font-orbitron font-bold text-xs tracking-widest transition-all border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20 hover:border-green-500/60 hover:text-green-300"
               data-ocid="admin.whatsapp_button"
             >
               <svg
                 viewBox="0 0 24 24"
                 fill="currentColor"
-                width="14"
-                height="14"
+                width="13"
+                height="13"
                 aria-hidden="true"
               >
                 <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
               </svg>
-              HELP &amp; SUPPORT
+              <span className="hidden sm:inline">HELP &amp; SUPPORT</span>
             </a>
+
             {/* Refresh All */}
             <button
               type="button"
-              onClick={loadOrders}
+              onClick={() => loadOrders(true)}
               disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gamer-border bg-gamer-card hover:border-neon-gold/50 text-gamer-body hover:text-neon-gold font-orbitron font-bold text-xs tracking-widest transition-all disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gamer-border bg-gamer-card hover:border-neon-gold/50 text-gamer-body hover:text-neon-gold font-orbitron font-bold text-xs tracking-widest transition-all disabled:opacity-50"
               data-ocid="admin.button"
             >
-              <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
-              REFRESH ALL
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              <span className="hidden sm:inline">REFRESH ALL</span>
             </button>
+
             <button
               type="button"
               onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 font-orbitron font-bold text-xs tracking-widest transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 font-orbitron font-bold text-xs tracking-widest transition-all"
               data-ocid="admin.close_button"
             >
-              <LogOut size={13} />
-              LOGOUT
+              <LogOut size={12} />
+              <span className="hidden sm:inline">LOGOUT</span>
             </button>
           </div>
         </div>
@@ -479,7 +572,11 @@ export default function AdminDashboard({
                   textShadow: `0 0 12px ${stat.glow}`,
                 }}
               >
-                {stat.value}
+                {loading ? (
+                  <Loader2 size={24} className="animate-spin mx-auto" />
+                ) : (
+                  stat.value
+                )}
               </span>
               <span className="font-rajdhani text-gamer-muted text-xs tracking-widest uppercase">
                 {stat.label}
@@ -488,7 +585,7 @@ export default function AdminDashboard({
           ))}
         </motion.div>
 
-        {/* Orders */}
+        {/* Orders Section */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -530,7 +627,7 @@ export default function AdminDashboard({
             </div>
           )}
 
-          {/* Loading */}
+          {/* Loading state */}
           {loading ? (
             <div
               className="flex flex-col items-center justify-center py-24 gap-4 text-gamer-muted font-rajdhani"
@@ -538,7 +635,9 @@ export default function AdminDashboard({
             >
               <Loader2 className="animate-spin h-8 w-8 text-neon-gold" />
               <span className="text-sm">
-                Fetching all orders from all users...
+                {isConnecting
+                  ? "Connecting to server (up to 30s)..."
+                  : "Fetching all orders from all users..."}
               </span>
             </div>
           ) : orders.length === 0 ? (
@@ -565,6 +664,15 @@ export default function AdminDashboard({
                   Orders from all users will appear here after submission
                 </p>
               </div>
+              {!isConnected && !isConnecting && (
+                <button
+                  type="button"
+                  onClick={() => loadOrders(true)}
+                  className="px-5 py-2.5 rounded-xl font-orbitron font-bold text-xs tracking-widest text-neon-gold border border-neon-gold/30 bg-neon-gold/5 hover:bg-neon-gold/10 transition-all"
+                >
+                  RETRY CONNECTION
+                </button>
+              )}
             </motion.div>
           ) : (
             <div className="space-y-4" data-ocid="admin.list">
@@ -593,7 +701,7 @@ export default function AdminDashboard({
                     className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-gamer-border/60"
                     style={{ background: "#111318" }}
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {/* Order ID badge */}
                       <span
                         className="px-2.5 py-1 rounded-lg font-orbitron font-bold text-xs tracking-wider"
